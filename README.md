@@ -2,7 +2,7 @@
 
 > A native desktop Markdown book reader.
 > Smaller than Obsidian. Lighter than a notebook.
-> Markdown *or* HTML. Why not both?
+> Markdown *or* HTML. **Why not both**?
 
 ![Library](docs/screenshots/library.png)
 
