@@ -1,0 +1,36 @@
+{
+  "name": "md-reader",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "build:desktop": "tauri build"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
+    "@marp-team/marp-core": "^4.3.0",
+    "@tauri-apps/api": "^2",
+    "@tiptap/core": "^3.24.0",
+    "@tiptap/extension-placeholder": "^3.24.0",
+    "@tiptap/starter-kit": "^3.24.0",
+    "highlight.js": "^11.9.0",
+    "html2pdf.js": "^0.14.0",
+    "mermaid": "^10.9.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "showdown": "^2.1.0",
+    "tiptap-markdown": "^0.9.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4",
+    "@tauri-apps/cli": "^2.11.2",
+    "puppeteer-core": "^25.1.0",
+    "svelte": "^5",
+    "vite": "^5"
+  }
+}

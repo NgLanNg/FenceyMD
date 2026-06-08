@@ -1,0 +1,38 @@
+# OS / editor
+.DS_Store
+*.log
+*.swp
+*.swo
+.history/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Vite / Svelte build output
+dist/
+dist-linux/
+
+# Tauri / Rust build output
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/gen/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# IDE / agent session state (regenerated locally, never source)
+.opencode/
+.claude/
+vault/
+.vscode/
+.idea/
+
+# Local AI tooling state (regenerated on each run, not part of the public repo)
+/.harness/
+.harness/memory/
+
+# OS junk
+Thumbs.db
