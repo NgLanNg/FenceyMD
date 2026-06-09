@@ -15,7 +15,9 @@ dist-linux/
 
 # Tauri / Rust build output
 src-tauri/target/
-src-tauri/Cargo.lock
+# Cargo.lock is gitignored for libraries, but MD Reader is a
+# binary app — committing the lockfile makes every release
+# reproducible (Tauri docs recommend this for app crates).
 src-tauri/gen/
 
 # Environment / secrets
