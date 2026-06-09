@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:desktop": "tauri build"
+    "build:desktop": "tauri build",
+    "licenses": "node scripts/gen-licenses.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
@@ -22,6 +23,7 @@
     "html2pdf.js": "^0.14.0",
     "katex": "^0.16.11",
     "mermaid": "^10.9.1",
+    "papaparse": "^5.5.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "shiki": "^1.22.2",

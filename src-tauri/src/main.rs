@@ -1113,6 +1113,49 @@ body {{
   page-break-inside: avoid;
 }}
 
+/* CSV fence — the JS-side enhance() turns ```csv into a real <table>
+   inside a .csv-block card. Match the reader's typography. */
+.chapter-markdown .csv-block {{
+  background: var(--surface-container-lowest);
+  border: 1px solid var(--surface-variant);
+  border-radius: var(--radius-md, 4px);
+  padding: var(--space-3, 0.75rem) var(--space-5, 1.25rem);
+  margin: var(--space-4, 1rem) 0;
+  page-break-inside: avoid;
+}}
+.chapter-markdown .csv-block table {{
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  font-family: var(--font-sans, sans-serif);
+}}
+.chapter-markdown .csv-block th {{
+  background: transparent;
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  text-align: left;
+  font-weight: 600;
+  color: var(--ink);
+  border-bottom: 1.5px solid var(--ink-muted);
+  white-space: nowrap;
+}}
+.chapter-markdown .csv-block td {{
+  padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  border-bottom: 1px solid var(--surface-variant);
+  color: var(--ink);
+  vertical-align: top;
+}}
+.chapter-markdown .csv-block tbody tr:nth-child(even) td {{
+  background: var(--surface-container-low);
+}}
+.chapter-markdown .csv-block-note {{
+  margin-top: var(--space-3, 0.75rem);
+  padding-top: var(--space-2, 0.5rem);
+  border-top: 1px dashed var(--surface-variant);
+  color: var(--ink-muted);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.7rem;
+}}
+
 /* Strip the in-app diagram toolbar (Copy / PNG / theme toggle) — print only. */
 .chapter-markdown .diagram-tools,
 .chapter-markdown .copy-btn,
@@ -1421,7 +1464,7 @@ A --> B
         let m = load_renderer_manifest();
         assert!(!m.is_empty(), "manifest should declare at least one renderer");
         let langs: Vec<&str> = m.iter().map(|e| e.lang.as_str()).collect();
-        for required in ["svg", "html", "mermaid", "excalidraw", "math", "shiki"] {
+        for required in ["svg", "html", "mermaid", "excalidraw", "csv", "math", "shiki"] {
             assert!(langs.contains(&required), "manifest missing lang: {}", required);
         }
         // shiki is the defaultFor: "code" entry; confirm it parses.

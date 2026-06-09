@@ -102,6 +102,60 @@
       margin: 0.5rem 0;
       overflow: auto;
     }
+    /* CSV fence — a table inside a quiet card. Wraps the auto table
+       that ```csv produces so the user can scroll horizontally on
+       narrow viewports without the page being taken over. */
+    .csv-block {
+      background: var(--surface-container-lowest);
+      border: 1px solid var(--surface-variant);
+      border-radius: var(--radius-md, 4px);
+      padding: var(--space-3, 0.75rem) var(--space-5, 1.25rem);
+      margin: var(--space-5, 1.25rem) 0;
+      overflow-x: auto;
+    }
+    .csv-block table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      font-family: var(--font-sans);
+    }
+    .csv-block th {
+      background: transparent;
+      padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+      text-align: left;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--ink);
+      border-bottom: 1.5px solid var(--ink-muted);
+      white-space: nowrap;
+    }
+    .csv-block td {
+      padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+      border-bottom: 1px solid var(--surface-variant);
+      color: var(--ink);
+      vertical-align: top;
+    }
+    .csv-block tbody tr:last-child td { border-bottom: none; }
+    .csv-block tbody tr:nth-child(even) td { background: var(--surface-container-low); }
+    .csv-block-note {
+      margin-top: var(--space-3, 0.75rem);
+      padding-top: var(--space-2, 0.5rem);
+      border-top: 1px dashed var(--surface-variant);
+      color: var(--ink-muted);
+      font-family: var(--font-mono, monospace);
+      font-size: 0.75rem;
+      letter-spacing: 0.02em;
+    }
+    .csv-block-empty {
+      color: var(--ink-muted);
+      font-style: italic;
+      padding: var(--space-4, 1rem) var(--space-3, 0.75rem);
+    }
+    .csv-block-raw pre {
+      margin: 0;
+      font-family: var(--font-mono, monospace);
+      font-size: 0.82rem;
+    }
 
     /* Full CSS */
     :root {

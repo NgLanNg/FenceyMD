@@ -10,3 +10,4 @@ import './mermaid.js';
 import './excalidraw.js';
 import './math.js';
 import './shiki.js';
+import './csv.js';

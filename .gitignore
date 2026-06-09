@@ -26,6 +26,7 @@ src-tauri/gen/
 # IDE / agent session state (regenerated locally, never source)
 .opencode/
 .claude/
+.mavis/
 vault/
 .vscode/
 .idea/

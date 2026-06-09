@@ -284,6 +284,88 @@ if (!excalNav) {
     : fail('Excalidraw mount', `wrappers=${exInfo.wrappers} canvases=${exInfo.canvases}`);
 }
 
+// ── 22. Slide view (Marp) opens and renders at least one slide page ────────
+// (Phase 5 of PLAN.md — the slides feature was previously exercised
+// only by the inline-SVG test (#16), which navigated to the slides
+// chapter but only asserted on SVG blocks. This test actually opens
+// the slide viewer and asserts the Marp chrome is present.)
+const slideNav = await page.evaluate(() => {
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  const s = chapters.find(c => /slide/i.test(c.textContent));
+  if (s) { s.click(); return true; }
+  return false;
+});
+if (!slideNav) {
+  fail('Slide chapter', 'not found in sidebar');
+} else {
+  await new Promise(r => setTimeout(r, 500));
+  // The slide icon is the toolbar button (aria-label="Toggle slide view").
+  // Match by aria-label to avoid hitting the sidebar chapter button whose
+  // title also contains "slide" (e.g. "06 Slides").
+  const slideBtn = await page.$('button[aria-label="Toggle slide view"]');
+  if (!slideBtn) {
+    fail('Slide view opens', 'no slide-view button in toolbar');
+  } else {
+    await slideBtn.click();
+    await new Promise(r => setTimeout(r, 2500)); // Marp dynamic-import (3 MB chunk) + render
+    const slideInfo = await page.evaluate(() => {
+      // The slide viewer mounts `.slide-stage` with one `.slide-svg`
+      // per deck page. Each cloned <svg> carries `data-slide-index`
+      // and contains a <foreignObject><section> with the slide
+      // content. That's our "the deck rendered" signal.
+      const stage = document.querySelector('.slide-stage');
+      const slideSvgs = document.querySelectorAll('.slide-svg svg[data-slide-index]');
+      const sections = document.querySelectorAll('.slide-svg svg[data-slide-index] foreignObject > section');
+      return {
+        hasStage: !!stage,
+        slideSvgs: slideSvgs.length,
+        sections: sections.length,
+      };
+    });
+    slideInfo.hasStage && slideInfo.slideSvgs > 0 && slideInfo.sections > 0
+      ? pass(`Slide view renders (${slideInfo.slideSvgs} deck page${slideInfo.slideSvgs !== 1 ? 's' : ''}, ${slideInfo.sections} section${slideInfo.sections !== 1 ? 's' : ''})`)
+      : fail('Slide view', `stage=${slideInfo.hasStage} svgs=${slideInfo.slideSvgs} sections=${slideInfo.sections}`);
+    // Exit slide view so subsequent tests see the reader chrome.
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 400));
+  }
+}
+
+// ── 23. CSV fence renders as a real <table> in the registry path ──────────
+// (Phase 5 of PLAN.md — CSV pulled into lean core. The renderer
+// papaparse-lazy-loads and replaces the <pre> with a <div class="csv-block">
+// wrapping a <table> with <thead> and <tbody>. The first row becomes
+// <th>, subsequent rows become <td>.)
+const csvNav = await page.evaluate(() => {
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  const c = chapters.find(c => /csv/i.test(c.textContent));
+  if (c) { c.click(); return true; }
+  return false;
+});
+if (!csvNav) {
+  fail('CSV chapter', 'not found in sidebar');
+} else {
+  await new Promise(r => setTimeout(r, 800)); // papaparse lazy-load + parse
+  const csvInfo = await page.evaluate(() => {
+    const wrappers = [...document.querySelectorAll('.chapter-markdown .csv-block')];
+    const tables = [...document.querySelectorAll('.chapter-markdown .csv-block table')];
+    const headers = [...document.querySelectorAll('.chapter-markdown .csv-block thead th')];
+    const rows = [...document.querySelectorAll('.chapter-markdown .csv-block tbody tr')];
+    // The .csv-block-note at the bottom should be present and have a row count.
+    const note = document.querySelector('.chapter-markdown .csv-block .csv-block-note');
+    return {
+      wrappers: wrappers.length,
+      tables: tables.length,
+      headers: headers.length,
+      rows: rows.length,
+      note: note?.textContent || '',
+    };
+  });
+  csvInfo.wrappers > 0 && csvInfo.tables > 0 && csvInfo.headers > 0 && csvInfo.rows > 0
+    ? pass(`CSV fence renders as table (${csvInfo.wrappers} block${csvInfo.wrappers !== 1 ? 's' : ''}, ${csvInfo.headers} headers, ${csvInfo.rows} rows; note: "${csvInfo.note}")`)
+    : fail('CSV table', `wrappers=${csvInfo.wrappers} tables=${csvInfo.tables} headers=${csvInfo.headers} rows=${csvInfo.rows}`);
+}
+
 await browser.close();
 
 const failed = results.filter(r => r[0] === 'FAIL');

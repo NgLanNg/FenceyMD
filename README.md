@@ -56,6 +56,9 @@ editing.
 - **Inline Excalidraw.** Open a drawing canvas, save back to the
   same `.md` file. Editor runtime state stripped; only the
   document survives.
+- **Inline CSV.** Drop a ```csv fence, get a real `<table>` —
+  first row is the header, the rest is data, the chrome stays
+  calm. No interactive grid, no spreadsheet.
 - **PDF export.** Headless Chrome renders the live chapter (with
   SVGs inlined) to vector-text PDF.
 - **Edit & save.** Swap a chapter into raw-markdown mode, write
@@ -124,7 +127,7 @@ npm run build:desktop   # → .app + .dmg (mac) / .msi + .exe (win) / .deb + .Ap
 7. **Preferences.** Gear icon (top-right). Theme, font, width,
    sidebar collapse. All remembered.
 
-The bundled [`demo/`](demo/) is a 10-chapter self-introducing
+The bundled [`demo/`](demo/) is a 13-chapter self-introducing
 tour of every feature. Load it with `?test=1`.
 
 ---
@@ -142,3 +145,15 @@ Hand the agent the folder and let it work.
 ## License
 
 MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Alan Nguyen.
+
+Built on the work of many — see
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) for the full
+attribution (445 npm + 527 cargo deps, ~98% permissive). One
+transitive dep under EPL-2.0 (`elkjs`, used by mermaid for
+graph layout) is noted explicitly there.
+
+To regenerate the file after a dep change:
+
+```bash
+npm run licenses
+```
