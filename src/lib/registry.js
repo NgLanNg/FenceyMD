@@ -194,26 +194,43 @@ export async function enhance(area, meta = {}) {
   attachCopyButtons(area);
 }
 
+// Wrap a `<pre>` in a `.code-block-wrapper` with a copy button. Used
+// by `attachCopyButtons()` for plain fences and by the shiki renderer
+// for highlighted ones. Pre must already be in the DOM.
+export function wrapWithCopyButton(pre) {
+  if (!pre || pre.closest('.code-block-wrapper')) return null;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'code-block-wrapper';
+  pre.parentNode.insertBefore(wrapper, pre);
+  wrapper.appendChild(pre);
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = 'Copy';
+  btn.setAttribute('aria-label', 'Copy code to clipboard');
+  btn.addEventListener('click', () => {
+    const code = pre.querySelector('code');
+    const text = code ? code.textContent : pre.textContent;
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    }).catch(() => {
+      // Older browsers / restricted contexts: still surface feedback.
+      btn.textContent = '✕';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  });
+  wrapper.appendChild(btn);
+  return wrapper;
+}
+
 function attachCopyButtons(area) {
   area.querySelectorAll('pre').forEach((pre) => {
     if (pre.closest('.code-block-wrapper')) return;
     if (pre.classList.contains('mermaid') || pre.classList.contains('svg-block') || pre.classList.contains('excalidraw-block') || pre.classList.contains('html-block') || pre.classList.contains('slide-svg-block') || pre.classList.contains('slide-html-block')) return;
     if (pre.classList.contains('shiki-block') || pre.classList.contains('shiki')) return;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'code-block-wrapper';
-    pre.parentNode.insertBefore(wrapper, pre);
-    wrapper.appendChild(pre);
-    const btn = document.createElement('button');
-    btn.className = 'copy-btn';
-    btn.textContent = 'Copy';
-    btn.addEventListener('click', () => {
-      const code = pre.querySelector('code');
-      navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
-        btn.textContent = '✓';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-      });
-    });
-    wrapper.appendChild(btn);
+    wrapWithCopyButton(pre);
   });
 }
 

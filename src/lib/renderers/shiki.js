@@ -13,7 +13,7 @@
 // we've already touched. Calling shiki twice on the same block
 // would re-highlight an already-highlighted block (text → text
 // round-trip), which is wrong.
-import { register } from '../registry.js';
+import { register, wrapWithCopyButton } from '../registry.js';
 
 let _shiki = null;
 let _shikiReady = null;
@@ -92,6 +92,10 @@ async function highlightIn(area, dark) {
           if (c.startsWith('language-') && !newPre.classList.contains(c)) newPre.classList.add(c);
         }
         pre.replaceWith(newPre);
+        // Wrap the shiki-rendered pre with a copy button (ROADMAP v1.1 #1).
+        // attachCopyButtons() deliberately skips .shiki-block so the
+        // shiki path is the only place that gets the wrapper.
+        wrapWithCopyButton(newPre);
       }
     } catch (e) {
       console.warn('[shiki]', e?.message || e);

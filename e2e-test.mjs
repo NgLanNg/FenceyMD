@@ -177,26 +177,33 @@ if (!navigatedCode) {
   fail('Code chapter', 'not found in sidebar');
 } else {
   await new Promise(r => setTimeout(r, 1200)); // shiki is lazy-loaded + grammar init
-  const shikiInfo = await page.evaluate(() => {
-    const blocks = [...document.querySelectorAll('.chapter-markdown .shiki-block, .chapter-markdown .shiki')];
-    // Dual theme: shiki emits `style="color:#x;--shiki-dark:#y"` on each
-    // token. The presence of --shiki-dark inline styles confirms the
-    // dual-theme wiring is active.
-    const tokens = [...document.querySelectorAll('.chapter-markdown .shiki-block span, .chapter-markdown .shiki span')];
-    const hasDark = tokens.some(s => s.getAttribute('style')?.includes('--shiki-dark'));
-    // Multiple language classes should be present (one per fenced block).
-    const langs = new Set();
-    for (const b of blocks) {
-      for (const c of b.classList) {
-        const m = c.match(/^language-(\w+)$/);
-        if (m) langs.add(m[1]);
+    const shikiInfo = await page.evaluate(() => {
+      const blocks = [...document.querySelectorAll('.chapter-markdown .shiki-block, .chapter-markdown .shiki')];
+      // Dual theme: shiki emits `style="color:#x;--shiki-dark:#y"` on each
+      // token. The presence of --shiki-dark inline styles confirms the
+      // dual-theme wiring is active.
+      const tokens = [...document.querySelectorAll('.chapter-markdown .shiki-block span, .chapter-markdown .shiki span')];
+      const hasDark = tokens.some(s => s.getAttribute('style')?.includes('--shiki-dark'));
+      // Multiple language classes should be present (one per fenced block).
+      const langs = new Set();
+      for (const b of blocks) {
+        for (const c of b.classList) {
+          const m = c.match(/^language-(\w+)$/);
+          if (m) langs.add(m[1]);
+        }
       }
-    }
-    return { blocks: blocks.length, hasDark, langs: [...langs] };
-  });
-  shikiInfo.blocks > 0 && shikiInfo.hasDark && shikiInfo.langs.length >= 3
-    ? pass(`Shiki highlights code (${shikiInfo.blocks} blocks, langs: ${shikiInfo.langs.join(',')})`)
-    : fail('Shiki', `blocks=${shikiInfo.blocks} hasDark=${shikiInfo.hasDark} langs=${shikiInfo.langs.join(',')}`);
+      // ROADMAP v1.1 #1: every shiki block should have a copy button.
+      // The shiki renderer wraps each block in a `.code-block-wrapper`
+      // with a `.copy-btn` next to it; plain fences get the same shape
+      // via attachCopyButtons().
+      const wrappersWithButtons = blocks.filter((b) =>
+        b.closest('.code-block-wrapper')?.querySelector(':scope > .copy-btn')
+      ).length;
+      return { blocks: blocks.length, hasDark, langs: [...langs], wrappersWithButtons };
+    });
+    shikiInfo.blocks > 0 && shikiInfo.hasDark && shikiInfo.langs.length >= 3 && shikiInfo.wrappersWithButtons === shikiInfo.blocks
+      ? pass(`Shiki highlights code (${shikiInfo.blocks} blocks, langs: ${shikiInfo.langs.join(',')}, ${shikiInfo.wrappersWithButtons} copy buttons)`)
+      : fail('Shiki', `blocks=${shikiInfo.blocks} hasDark=${shikiInfo.hasDark} langs=${shikiInfo.langs.join(',')} copyBtns=${shikiInfo.wrappersWithButtons}/${shikiInfo.blocks}`);
 }
 
 // ── 19. Inline SVG fence renders namespace-correct ───────────────────────
