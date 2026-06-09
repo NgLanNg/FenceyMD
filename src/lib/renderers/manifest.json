@@ -1,0 +1,8 @@
+[
+  { "lang": "svg",        "kind": "fence",  "module": "./renderers/svg.js" },
+  { "lang": "html",       "kind": "fence",  "module": "./renderers/html.js" },
+  { "lang": "mermaid",    "kind": "fence",  "module": "./renderers/mermaid.js" },
+  { "lang": "excalidraw", "kind": "fence",  "module": "./renderers/excalidraw.js" },
+  { "lang": "math",       "kind": "inline", "module": "./renderers/math.js" },
+  { "lang": "shiki",      "kind": "fence",  "module": "./renderers/shiki.js", "defaultFor": "code" }
+]

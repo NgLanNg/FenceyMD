@@ -199,6 +199,91 @@ if (!navigatedCode) {
     : fail('Shiki', `blocks=${shikiInfo.blocks} hasDark=${shikiInfo.hasDark} langs=${shikiInfo.langs.join(',')}`);
 }
 
+// ── 19. Inline SVG fence renders namespace-correct ───────────────────────
+// (Phase 2 of PLAN.md — guard that the registry's svg.js preserves
+// the namespace-correct DOMParser re-wrap. The previous bug was that
+// `innerHTML` insertion put <svg> children in the HTML namespace; the
+// fix is to use createElementNS + setAttribute('xmlns', svg-ns).)
+const svgBlockCheck = await page.evaluate(() => {
+  // Use the SVG demo chapter (05-svg.md). It's already loaded in the
+  // reader from the earlier svgInfo test; navigate to it explicitly
+  // so the assertion is independent of test 16's chapter state.
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  const svg = chapters.find(c => /svg/i.test(c.textContent));
+  if (svg) svg.click();
+  return true;
+});
+await new Promise(r => setTimeout(r, 400));
+const svgNsInfo = await page.evaluate(() => {
+  const blocks = [...document.querySelectorAll('.chapter-markdown .svg-block svg')];
+  return {
+    count: blocks.length,
+    hasXmlns: blocks.some(s => s.getAttribute('xmlns') === 'http://www.w3.org/2000/svg'),
+    hasViewBox: blocks.some(s => s.getAttribute('viewBox')),
+  };
+});
+svgNsInfo.count > 0 && svgNsInfo.hasXmlns && svgNsInfo.hasViewBox
+  ? pass(`SVG fence renders namespace-correct (${svgNsInfo.count} <svg>, xmlns + viewBox set)`)
+  : fail('SVG namespace', `count=${svgNsInfo.count} xmlns=${svgNsInfo.hasXmlns} viewBox=${svgNsInfo.hasViewBox}`);
+
+// ── 20. Mermaid renders to <svg> (registry path) ──────────────────────────
+// (Phase 2 of PLAN.md — guard that the registry's mermaid.js produces
+// an <svg> with a viewBox from a ```mermaid fence. The per-diagram
+// light/dark toggle, Copy/PNG tools are bonus features we don't lock in.)
+const mermaidNav = await page.evaluate(() => {
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  const m = chapters.find(c => /mermaid|diagram/i.test(c.textContent));
+  if (m) { m.click(); return true; }
+  return false;
+});
+if (!mermaidNav) {
+  fail('Mermaid chapter', 'not found in sidebar');
+} else {
+  await new Promise(r => setTimeout(r, 1500)); // mermaid lazy-load + render
+  const mmdInfo = await page.evaluate(() => {
+    const blocks = [...document.querySelectorAll('.chapter-markdown pre.mermaid svg')];
+    return {
+      count: blocks.length,
+      hasViewBox: blocks.some(s => s.getAttribute('viewBox')),
+    };
+  });
+  mmdInfo.count > 0 && mmdInfo.hasViewBox
+    ? pass(`Mermaid renders to <svg> (${mmdInfo.count} <svg> with viewBox)`)
+    : fail('Mermaid registry', `count=${mmdInfo.count} viewBox=${mmdInfo.hasViewBox}`);
+}
+
+// ── 21. Excalidraw block mounts the viewer (registry path) ────────────────
+// (Phase 2 of PLAN.md — guard that the registry's excalidraw.js mounts
+// the Svelte viewer into the fenced block. We assert the presence of
+// either the .excalidraw-block wrapper (always present) or the React-
+// mounted .excalidraw host the viewer injects.)
+const excalNav = await page.evaluate(() => {
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  const e = chapters.find(c => /excalidraw|drawing/i.test(c.textContent));
+  if (e) { e.click(); return true; }
+  return false;
+});
+if (!excalNav) {
+  fail('Excalidraw chapter', 'not found in sidebar');
+} else {
+  await new Promise(r => setTimeout(r, 1500)); // React + excalidraw lazy-load
+  const exInfo = await page.evaluate(() => {
+    // ExcalidrawViewer.svelte mounts a React <Excalidraw> component
+    // which renders a <canvas> for the scene. The wrapper has the
+    // excalidraw-block class set by the renderer. We look for either
+    // the wrapper or a mounted canvas.
+    const wrappers = [...document.querySelectorAll('.chapter-markdown .excalidraw-block')];
+    const canvases = [...document.querySelectorAll('.chapter-markdown .excalidraw-block canvas')];
+    return {
+      wrappers: wrappers.length,
+      canvases: canvases.length,
+    };
+  });
+  exInfo.wrappers > 0
+    ? pass(`Excalidraw block mounts the viewer (${exInfo.wrappers} wrapper${exInfo.wrappers !== 1 ? 's' : ''}, ${exInfo.canvases} canvas${exInfo.canvases !== 1 ? 'es' : ''})`)
+    : fail('Excalidraw mount', `wrappers=${exInfo.wrappers} canvases=${exInfo.canvases}`);
+}
+
 await browser.close();
 
 const failed = results.filter(r => r[0] === 'FAIL');

@@ -20,6 +20,15 @@
   // only grows when the user actually opens a chapter with slides.
   import { onMount, onDestroy, tick } from 'svelte';
   import { splitIntoSlides } from '../lib/slides.js';
+  // Phase 2: the registry is the single source of truth for fence
+  // dispatch. The reader + slides + PDF all go through it, so adding
+  // a new fence type means dropping a file in `renderers/` and adding
+  // an entry to `renderers/manifest.json` — no SlideViewer changes.
+  import { dispatch } from '../lib/registry.js';
+  // Register the core renderers with the registry at module init
+  // (svg, html, mermaid, excalidraw, math, shiki).
+  import '../lib/renderers/index.js';
+  import { addDiagramTools } from '../lib/diagram-export.js';
 
   let { markdown = '', onExit } = $props();
 
@@ -93,137 +102,53 @@
       document.body.appendChild(marpHostEl);
       const marpitDiv = marpHostEl.querySelector('div.marpit');
       if (marpitDiv) {
-        // Post-process: render fenced ```svg and ```html blocks as live
-        // content inside each slide. Marp's own output treats them as
-        // syntax-highlighted code, but the demo wants the live graphic.
-        // Malformed SVG yields a `<parsererror>` document; fall back to
-        // the raw source as text so the user can see and fix it.
-        marpitDiv.querySelectorAll('pre code.language-svg, pre code[class*="language-svg"]').forEach((code) => {
-          const pre = code.parentElement;
-          const src = code.textContent.trim();
-          const wrap = document.createElement('div');
-          wrap.className = 'slide-svg-block';
-          const parser = new DOMParser();
-          const parsed = parser.parseFromString(src, 'image/svg+xml');
-          if (parsed.querySelector('parsererror')) {
-            wrap.classList.add('slide-svg-block-error');
-            wrap.textContent = src;
-          } else {
-            // The fence source is a complete <svg>...</svg> document.
-            // Parse it to extract inner elements (strip <svg> wrapper), then
-            // re-wrap in a proper <svg> with an explicit viewBox so it scales
-            // correctly inside the foreignObject regardless of original size.
-            const srcSvg = parsed.documentElement;
-            const inner = srcSvg.innerHTML;           // just the child elements
-            const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            // Use the viewBox from the source, or fall back to 200x80 (the demo size).
-            svgEl.setAttribute('viewBox', srcSvg.getAttribute('viewBox') || '0 0 200 80');
-            svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-            svgEl.innerHTML = inner;
-            wrap.appendChild(svgEl);
-          }
-          pre.replaceWith(wrap);
-        });
-        marpitDiv.querySelectorAll('pre code.language-html, pre code[class*="language-html"]').forEach((code) => {
-          const pre = code.parentElement;
-          const wrap = document.createElement('div');
-          wrap.className = 'slide-html-block';
-          wrap.innerHTML = code.textContent;
-          pre.replaceWith(wrap);
-        });
-
-        // Reuse the same math + shiki pipeline as the reader so math and
-        // code blocks render consistently in slides.
-        // Lazy-load katex + shiki (same shape as src/lib/markdown.js) and
-        // run them over Marp's rendered HTML. Skip if the user hasn't
-        // dropped any math / code fences in the deck.
-        const text = marpitDiv.textContent || '';
-        const codeFences = marpitDiv.querySelectorAll('pre code');
-        const tasks = [];
-        if (text.includes('$')) {
-          tasks.push(import('katex').then((mod) => {
-            const katex = mod.default;
-            const walker = document.createTreeWalker(marpitDiv, NodeFilter.SHOW_TEXT, null, false);
-            const targets = [];
-            let n;
-            while ((n = walker.nextNode())) {
-              const p = n.parentNode;
-              if (!p) continue;
-              const tag = p.nodeName;
-              if (tag === 'CODE' || tag === 'PRE' || tag === 'SCRIPT' || tag === 'STYLE') continue;
-              if (!/\$/.test(n.nodeValue)) continue;
-              targets.push(n);
-            }
-            for (const t of targets) {
-              const src = t.nodeValue;
-              // Same regex as markdown.js.
-              const matches = [];
-              const BLOCK = /\$\$([\s\S]+?)\$\$/g;
-              const INLINE = /(?<!\\)\$(?!\s)([^\n$]+?)(?<!\\)\$(?!\d)/g;
-              let m;
-              BLOCK.lastIndex = 0;
-              while ((m = BLOCK.exec(src))) matches.push({ start: m.index, end: m.index + m[0].length, tex: m[1], display: true });
-              INLINE.lastIndex = 0;
-              while ((m = INLINE.exec(src))) {
-                if (matches.some((b) => m.index >= b.start && m.index < b.end)) continue;
-                matches.push({ start: m.index, end: m.index + m[0].length, tex: m[1], display: false });
-              }
-              if (!matches.length) continue;
-              matches.sort((a, b) => a.start - b.start);
-              const frag = document.createDocumentFragment();
-              let lastIndex = 0;
-              for (const match of matches) {
-                if (match.start > lastIndex) frag.appendChild(document.createTextNode(src.slice(lastIndex, match.start)));
-                const span = document.createElement('span');
-                span.className = 'math-render';
-                try { katex.render(match.tex, span, { displayMode: match.display, throwOnError: false }); }
-                catch (_) { span.replaceWith(document.createTextNode(src.slice(match.start, match.end))); lastIndex = match.end; continue; }
-                frag.appendChild(span);
-                lastIndex = match.end;
-              }
-              if (lastIndex < src.length) frag.appendChild(document.createTextNode(src.slice(lastIndex)));
-              t.parentNode.replaceChild(frag, t);
-            }
-          }));
+        // Post-process fenced blocks through the registry. The reader
+        // does the same via `enhance()`; slides use `dispatch` directly
+        // because Marp's output wraps the whole deck in a single
+        // `<div class="marpit">` and we don't want the per-area math
+        // walker or copy-button pass — only the fence renderers.
+        const dark = typeof document !== 'undefined'
+          && document.documentElement.getAttribute('data-theme') === 'dark';
+        const ctx = {
+          area: marpitDiv,
+          isPdf: false,
+          dark,
+          meta: {},
+          // Slides wrap svg/html blocks with slide-prefixed classes so
+          // the fixed 16:9 viewport can size the graphic appropriately.
+          // The registry's svg/html renderers honor ctx.wrapClassName.
+          svgWrapClass: 'slide-svg-block',
+          htmlWrapClass: 'slide-html-block',
+          diagramTools: (container, name, opts) => addDiagramTools(container, name, opts),
+        };
+        // Walk every fence in document order and dispatch to the
+        // registry. Unknown langs go through the shiki renderer.
+        // We match any <pre><code> whose class list contains a
+        // `language-X` token — the previous `class^="language-"`
+        // selector failed when the class attribute string started
+        // with a different token (e.g. "js language-js").
+        const codes = marpitDiv.querySelectorAll('pre code');
+        let i = 0;
+        for (const codeEl of codes) {
+          const pre = codeEl.parentElement;
+          if (!pre) continue;
+          const cls = [...codeEl.classList].find((c) => c.startsWith('language-'));
+          if (!cls) continue;
+          const lang = cls.slice('language-'.length).toLowerCase();
+          await dispatch(
+            { lang, body: codeEl.textContent, codeEl, pre, index: i },
+            ctx,
+          );
+          i += 1;
         }
-        if (codeFences.length) {
-          tasks.push(import('shiki').then(async (shiki) => {
-            // Use the same light/dark dual themes; default to light for
-            // slides (slides are projected on a light background by
-            // default, dark mode in the app swaps the .marpit container
-            // via CSS).
-            const highlighter = await shiki.createHighlighter({
-              themes: ['github-light', 'github-dark'],
-              langs: ['js', 'jsx', 'ts', 'tsx', 'json', 'css', 'html', 'xml', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'cs', 'sql', 'bash', 'shell', 'yaml', 'md'],
-            });
-            marpitDiv.querySelectorAll('pre code').forEach((code) => {
-              // Only process code blocks — not language-mermaid (handled by mermaid)
-              // or live-rendered blocks.
-              if (code.parentElement.closest('pre.mermaid, .svg-block, .html-block, .slide-svg-block, .slide-html-block')) return;
-              const cls = [...code.classList].find((c) => c.startsWith('language-'));
-              if (!cls) return;
-              const lang = cls.slice('language-'.length);
-              if (['mermaid', 'svg', 'html', 'excalidraw'].includes(lang)) return;
-              const resolved = highlighter.getLoadedLanguages().includes(lang) ? lang : 'text';
-              try {
-                const html = highlighter.codeToHtml(code.textContent || '', {
-                  lang: resolved,
-                  themes: { light: 'github-light', dark: 'github-dark' },
-                  defaultColor: 'light',
-                });
-                const tmp = document.createElement('div');
-                tmp.innerHTML = html;
-                const newPre = tmp.firstElementChild;
-                if (newPre && code.parentElement) {
-                  newPre.classList.add('shiki-block');
-                  code.parentElement.replaceWith(newPre);
-                }
-              } catch (e) { /* keep as plain code */ }
-            });
-          }));
+        // Math is text-node based; the registry's `math` renderer
+        // handles it via dispatch(lang='math', area, ...).
+        if (marpitDiv.textContent && /\$/.test(marpitDiv.textContent)) {
+          await dispatch(
+            { lang: 'math', area: marpitDiv, body: '', codeEl: null, pre: null, index: -1 },
+            ctx,
+          );
         }
-        // Run them in parallel and wait.
-        await Promise.all(tasks);
         const svgs = Array.from(marpitDiv.querySelectorAll(':scope > svg'));
         // Mark each as a slide for fitToStage() to find.
         svgs.forEach((svg, i) => {

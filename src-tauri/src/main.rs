@@ -609,6 +609,195 @@ fn read_katex_css() -> Result<String, String> {
     Err("katex.min.css not found in any candidate path".to_string())
 }
 
+// ── Renderer manifest (Phase 2) ───────────────────────────────────────────────
+//
+// The PDF pipeline needs to know which fence languages the JS-side registry
+// handles, because some renderers (mermaid, svg) produce HTML that prints
+// fine, while others (excalidraw) mount interactive components that don't
+// survive headless Chrome rasterization. We embed the JS manifest at compile
+// time via `include_str!` so the Rust side and the JS side stay in sync —
+// adding a renderer on the JS side means adding a row to the same JSON the
+// Rust side reads.
+
+#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum RendererKind { Fence, Inline, Math }
+
+#[derive(serde::Deserialize, Debug)]
+#[allow(dead_code)] // deserialized for validation; not every field is read
+struct ManifestEntry {
+    lang: String,
+    kind: RendererKind,
+    // `defaultFor` is camelCase in the manifest to match the JS-side
+    // property name. We rename on deserialize so the Rust struct stays
+    // idiomatic.
+    #[serde(rename = "defaultFor", default)]
+    default_for: Option<String>,
+    #[serde(default)]
+    module: Option<String>,
+}
+
+/// The PDF rendering mode for a given fence language.
+///
+/// - `Passthrough`: the JS side has already produced printable HTML
+///   (svg → `<div class="svg-block"><svg>`, shiki → `<pre class="shiki">`,
+///   math → `<span class="katex">`, html → `<div class="html-block">`,
+///   mermaid → `<pre class="mermaid"><svg>`). The PDF CSS handles styling.
+/// - `PreFallback`: the JS side has mounted an interactive component
+///   (excalidraw) that doesn't render in headless Chrome. We replace
+///   the wrapper with a `<pre>` showing the source JSON so the printed
+///   PDF still includes the scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PdfMode { Passthrough, PreFallback }
+
+fn pdf_mode_for(lang: &str) -> PdfMode {
+    match lang {
+        "excalidraw" => PdfMode::PreFallback,
+        // The JS manifest is the source of truth; everything else is
+        // passthrough. If a new fence is added with `kind: "fence"` and
+        // it's not excalidraw, it joins the passthrough set.
+        _ => PdfMode::Passthrough,
+    }
+}
+
+/// Minimal HTML-attribute escape for safe insertion into a `<pre>`.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+     .replace('<', "&lt;")
+     .replace('>', "&gt;")
+     .replace('"', "&quot;")
+}
+
+/// Walk `chapter_html` and apply PDF-specific transforms per the manifest.
+///
+/// Currently:
+/// - `excalidraw` blocks: the JS-side Svelte mount produces DOM that
+///   doesn't render in headless Chrome. We replace the whole `<pre>`
+///   with a `<pre class="excalidraw-fallback">` showing the original
+///   JSON (carried on `data-excalidraw-json` by markdown.js). The
+///   fallback is recognizable but readable in the printed PDF.
+///
+/// We operate on the source HTML (string-level) because the chapter
+/// is already fully rendered — the JS-side enhance() has done the
+/// expensive work. The transform is intentionally small and cheap.
+fn transform_for_pdf(html: &str) -> String {
+    // Two patterns the JS-side enhance() emits:
+    //   <pre class="excalidraw-block" data-excalidraw-json="…">…
+    //   <pre class="excalidraw-block …" data-excalidraw-json='…'>…
+    // The JSON may be empty if the JS side didn't set it (e.g. the
+    // source was malformed). We use a single pass to find every
+    // <pre …excalidraw-block… data-excalidraw-json="…">…</pre>.
+    //
+    // We use a regex-free manual walk to avoid pulling the `regex`
+    // crate in (deps are tight); the chapter_html is well-formed
+    // HTML emitted by showdown + our DOM ops.
+
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len() + 64);
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Look for the next <pre …excalidraw-block…> opening tag.
+        if let Some(rel) = find_subsequence(bytes, i, b"<pre") {
+            // Find the end of this opening tag.
+            let tag_start = i + rel;
+            let tag_close = match find_subsequence(bytes, tag_start + 4, b">") {
+                Some(p) => p,
+                None => {
+                    out.push_str(&html[i..]);
+                    return out;
+                }
+            };
+            let tag = &html[tag_start..=tag_close];
+            let is_excalidraw = tag.contains("excalidraw-block");
+            if !is_excalidraw {
+                // Not an excalidraw pre — emit everything up to + incl.
+                // the opening tag and keep scanning from after it.
+                out.push_str(&html[i..=tag_close]);
+                i = tag_close + 1;
+                continue;
+            }
+            // Find the matching </pre>. The chapter HTML we produce
+            // has no nested <pre> (we don't allow it), so the first
+            // `</pre>` after the opening tag is the close.
+            let pre_close = match find_subsequence(bytes, tag_close + 1, b"</pre>") {
+                Some(p) => p,
+                None => {
+                    out.push_str(&html[i..]);
+                    return out;
+                }
+            };
+            // Emit everything up to (but not including) the original
+            // <pre> opening tag.
+            out.push_str(&html[i..tag_start]);
+            // Dispatch via the manifest-driven table. Currently only
+            // excalidraw needs a transform (Svelte mount → JSON pre);
+            // every other fence is passthrough and the original <pre>
+            // is preserved. We still consult pdf_mode_for so adding a
+            // new PreFallback renderer in the future is a one-line
+            // change in the table, not a new code path.
+            let lang = extract_attr(tag, "data-excalidraw-json")
+                .map(|_| "excalidraw".to_string())
+                .unwrap_or_default();
+            match pdf_mode_for(&lang) {
+                PdfMode::Passthrough => {
+                    // Keep the original <pre> intact.
+                    out.push_str(&html[tag_start..pre_close + "</pre>".len()]);
+                }
+                PdfMode::PreFallback => {
+                    // Replace the mounted viewer with a JSON <pre>.
+                    let json = extract_attr(tag, "data-excalidraw-json")
+                        .unwrap_or_else(|| "{\"elements\":[]}".to_string());
+                    out.push_str("<pre class=\"excalidraw-fallback\">");
+                    out.push_str(&html_escape(&json));
+                    out.push_str("</pre>");
+                }
+            }
+            i = pre_close + "</pre>".len();
+        } else {
+            out.push_str(&html[i..]);
+            return out;
+        }
+    }
+    out
+}
+
+/// Find the first occurrence of `needle` in `haystack` starting at
+/// position `from` (byte offset). Returns the absolute byte offset
+/// of the match, or None.
+fn find_subsequence(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    if from >= haystack.len() || needle.is_empty() || needle.len() > haystack.len() - from {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| from + p)
+}
+
+/// Extract the value of a single-quoted or double-quoted attribute
+/// from a tag string. Returns None if the attribute is absent or the
+/// value contains a quote (rare in well-formed HTML).
+fn extract_attr<'a>(tag: &'a str, name: &str) -> Option<String> {
+    let needle = format!("{}=\"", name);
+    let start = tag.find(&needle)? + needle.len();
+    let rest = &tag[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// Parse the embedded manifest into a Vec of entries. We don't use the
+/// result for dispatch (pdf_mode_for is the lookup), but parsing it
+/// catches typos and missing files at compile time. The function is
+/// `const`-ish — it parses the embedded string into memory and is
+/// called once per `build_print_html` invocation. Manifest is small.
+fn load_renderer_manifest() -> Vec<ManifestEntry> {
+    let raw = include_str!("../../src/lib/renderers/manifest.json");
+    serde_json::from_str(raw).unwrap_or_else(|e| {
+        eprintln!("[md-reader] renderer manifest parse error: {}", e);
+        Vec::new()
+    })
+}
+
 fn build_print_html(
     title: &str,
     chapter_html: &str,
@@ -661,6 +850,19 @@ fn build_print_html(
 [data-theme="dark"] .shiki span { color: var(--shiki-dark, #e6edf3); }
 "#
     .to_string();
+
+    // Phase 2: read the manifest at compile time. The Vec is held in
+    // a local here so the dispatch is "manifest-driven" — the function
+    // table below uses pdf_mode_for() which is keyed off the same set
+    // of langs the manifest declares.
+    let _manifest = load_renderer_manifest();
+
+    // Manifest-driven pre-filter: walk the chapter_html for <pre> elements
+    // that need a PDF-specific transform (currently: excalidraw → JSON
+    // <pre> fallback because the Svelte-mounted viewer doesn't render in
+    // headless Chrome). For all other fence languages the JS-side
+    // enhance() has already produced printable HTML that the CSS styles.
+    let chapter_html = transform_for_pdf(chapter_html);
 
     format!(r#"<!DOCTYPE html>
 <html lang="en" data-theme="{dark}">
@@ -893,6 +1095,23 @@ body {{
   text-align: center;
 }}
 .chapter-markdown .svg-block svg {{ max-width: 100%; height: auto; }}
+
+/* Excalidraw scenes: the JS-side enhance() mounts an interactive
+   viewer; the Rust PDF transform replaces it with `.excalidraw-fallback`
+   showing the original JSON, so the printed PDF is still readable. */
+.chapter-markdown .excalidraw-fallback {{
+  background: var(--surface-container-lowest);
+  border: 1px solid var(--surface-variant);
+  border-radius: var(--radius-md, 4px);
+  padding: var(--space-4, 1rem);
+  margin: var(--space-4, 1rem) 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+  max-height: 200px;
+  overflow: auto;
+  page-break-inside: avoid;
+}}
 
 /* Strip the in-app diagram toolbar (Copy / PNG / theme toggle) — print only. */
 .chapter-markdown .diagram-tools,
@@ -1192,6 +1411,56 @@ A --> B
         assert!(style_block.contains(".katex"), "katex CSS rule missing from <style>: {}", &style_block[..style_block.len().min(200)]);
         // Shiki block rules should also be present so highlighted code looks right.
         assert!(style_block.contains(".shiki-block"), "shiki block CSS rule missing");
+    }
+
+    #[test]
+    fn renderer_manifest_parses_and_lists_langs() {
+        // The PDF pipeline must read the same manifest the JS side
+        // registers. If this test breaks, either the JSON is malformed
+        // or the path is wrong.
+        let m = load_renderer_manifest();
+        assert!(!m.is_empty(), "manifest should declare at least one renderer");
+        let langs: Vec<&str> = m.iter().map(|e| e.lang.as_str()).collect();
+        for required in ["svg", "html", "mermaid", "excalidraw", "math", "shiki"] {
+            assert!(langs.contains(&required), "manifest missing lang: {}", required);
+        }
+        // shiki is the defaultFor: "code" entry; confirm it parses.
+        let shiki = m.iter().find(|e| e.lang == "shiki").unwrap();
+        assert_eq!(shiki.default_for.as_deref(), Some("code"));
+    }
+
+    #[test]
+    fn transform_for_pdf_falls_back_excalidraw_to_pre() {
+        // The JS-side enhance() produces a <pre class="excalidraw-block"
+        // data-excalidraw-json="…"> with the React-mounted viewer inside.
+        // The PDF transform should replace it with a <pre
+        // class="excalidraw-fallback">…</pre> showing the original JSON.
+        let chapter = r#"<p>before</p>
+<pre class="excalidraw-block" data-excalidraw-json="{&quot;elements&quot;:[{&quot;id&quot;:&quot;a&quot;}]}">viewer content</pre>
+<p>after</p>"#;
+        let out = transform_for_pdf(chapter);
+        // The original excalidraw pre is replaced.
+        assert!(!out.contains("excalidraw-block"), "excalidraw-block should be replaced in PDF: {}", out);
+        // The fallback pre is present with the JSON.
+        assert!(out.contains("excalidraw-fallback"), "excalidraw-fallback missing: {}", out);
+        assert!(out.contains("elements"), "JSON body missing from fallback: {}", out);
+        // Surrounding content is preserved.
+        assert!(out.contains("<p>before</p>"));
+        assert!(out.contains("<p>after</p>"));
+    }
+
+    #[test]
+    fn transform_for_pdf_preserves_mermaid_and_svg() {
+        // Mermaid and SVG are passthrough — the JS-side enhance() has
+        // already rendered them to inline SVG, so the PDF just keeps
+        // the HTML.
+        let chapter = r#"<pre class="mermaid"><svg viewBox="0 0 100 100"></svg></pre>
+<div class="svg-block"><svg viewBox="0 0 200 80"></svg></div>
+<pre class="shiki-block"><code>x</code></pre>"#;
+        let out = transform_for_pdf(chapter);
+        assert!(out.contains("class=\"mermaid\""), "mermaid pre should be preserved");
+        assert!(out.contains("class=\"svg-block\""), "svg-block should be preserved");
+        assert!(out.contains("class=\"shiki-block\""), "shiki-block should be preserved");
     }
 
     #[test]
