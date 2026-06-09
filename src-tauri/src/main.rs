@@ -583,6 +583,32 @@ fn find_chrome() -> PathBuf {
     PathBuf::from("google-chrome")
 }
 
+/// Read katex's bundled CSS from node_modules so math renders in the printed
+/// PDF. The path is resolved relative to CARGO_MANIFEST_DIR (the src-tauri/
+/// directory at build time) — `../node_modules/katex/dist/katex.min.css`.
+/// This works in both dev (cargo run from src-tauri) and release (node_modules
+/// is shipped alongside the binary in the .app bundle). If the file is
+/// missing, the caller logs a warning and skips — the PDF will still render
+/// text content, just with raw `$…$` math.
+fn read_katex_css() -> Result<String, String> {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let candidates = [
+        // dev / source build: walk up from src-tauri/ to repo root
+        PathBuf::from(manifest_dir).join("../node_modules/katex/dist/katex.min.css"),
+        // release build: alongside the binary in the .app bundle's Resources
+        PathBuf::from(manifest_dir).join("../../../node_modules/katex/dist/katex.min.css"),
+        // resource_path at runtime (Tauri resolves this to the .app's Resources)
+        PathBuf::from(manifest_dir).join("node_modules/katex/dist/katex.min.css"),
+    ];
+    for path in &candidates {
+        if path.exists() {
+            return std::fs::read_to_string(path)
+                .map_err(|e| format!("read {}: {}", path.display(), e));
+        }
+    }
+    Err("katex.min.css not found in any candidate path".to_string())
+}
+
 fn build_print_html(
     title: &str,
     chapter_html: &str,
@@ -599,12 +625,55 @@ fn build_print_html(
         root_vars.push_str(&format!("  {}: {};\n", k, v));
     }
 
+    // Embed katex CSS so rendered math (katex emits <span class="katex">…)
+    // is legible in the PDF. node_modules is shipped with the app, both in
+    // dev and release. Path is computed from CARGO_MANIFEST_DIR at compile
+    // time, but the file is read at runtime so the PDF stays in sync with
+    // the installed katex version. If the file is missing, skip with a
+    // warning — the PDF will show raw `$…$` text (graceful degrade).
+    let katex_css = read_katex_css().unwrap_or_else(|e| {
+        eprintln!("[md-reader] katex CSS not embedded in PDF: {}", e);
+        String::new()
+    });
+
+    // Minimal shiki block CSS — the inline spans carry their own colors via
+    // CSS variables, but the wrapper card needs padding/border/radius. We
+    // duplicate the reader's `.shiki-block` rules here so the PDF matches
+    // the on-screen look without depending on a CSS file.
+    let shiki_css = r#"
+.shiki, .shiki-block {
+  background: var(--shiki-light-bg, #ffffff);
+  color: var(--shiki-light, #24292f);
+  border: 1px solid var(--surface-variant);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-6, 1.5rem);
+  margin: 0 0 var(--space-6, 1.5rem) 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  overflow-x: auto;
+}
+.shiki code, .shiki-block code { background: transparent; border: none; padding: 0; color: inherit; }
+.shiki span { color: var(--shiki-light, #24292f); }
+[data-theme="dark"] .shiki, [data-theme="dark"] .shiki-block {
+  background: var(--shiki-dark-bg, #0d1117);
+}
+[data-theme="dark"] .shiki span { color: var(--shiki-dark, #e6edf3); }
+"#
+    .to_string();
+
     format!(r#"<!DOCTYPE html>
 <html lang="en" data-theme="{dark}">
 <head>
 <meta charset="UTF-8">
 <title>{title}</title>
 <style>
+/* katex — embedded from node_modules so math renders in the PDF */
+{katex_css}
+
+/* shiki block wrapper — minimal rules so highlighted code looks the same as on screen */
+{shiki_css}
+
 :root {{
 {root_vars}}}
 
@@ -1102,6 +1171,27 @@ A --> B
         assert!(content[b1..e1].contains("\"b\":2"));
         // Block 2 = None
         assert!(locate_excalidraw_block(content, 2).is_none());
+    }
+
+    #[test]
+    fn build_print_html_embeds_katex_css() {
+        // The PDF pipeline must inline katex's stylesheet so rendered math
+        // (katex emits <span class="katex">) is legible. node_modules is
+        // present in the working tree during `cargo test`, so the read
+        // should succeed.
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("--ink".to_string(), "#1a1c1c".to_string());
+        vars.insert("--surface".to_string(), "#ffffff".to_string());
+        vars.insert("--surface-variant".to_string(), "#e3e2e1".to_string());
+        let html = build_print_html("Math", "<p>before</p><span class=\"katex\">x</span><p>after</p>", &vars);
+        // katex's stylesheet has the literal selector `.katex` — assert it
+        // is present in the embedded <style> block, not the chapter body.
+        let style_start = html.find("<style>").expect("<style> tag present");
+        let style_end = html.find("</style>").expect("</style> close");
+        let style_block = &html[style_start..style_end];
+        assert!(style_block.contains(".katex"), "katex CSS rule missing from <style>: {}", &style_block[..style_block.len().min(200)]);
+        // Shiki block rules should also be present so highlighted code looks right.
+        assert!(style_block.contains(".shiki-block"), "shiki block CSS rule missing");
     }
 
     #[test]

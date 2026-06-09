@@ -68,6 +68,9 @@
       const src = joinSlidesForMarp(slides);
       const { html, css } = marp.render(src);
 
+      // Katex + shiki CSS is loaded once by main.js for the whole app;
+      // slides inherit the same stylesheet. No slide-specific injection.
+
       // Inject Marp's CSS into the document once. The CSS is global
       // (it uses class selectors on `div.marpit`) so a single <style>
       // tag is fine.
@@ -128,6 +131,99 @@
           wrap.innerHTML = code.textContent;
           pre.replaceWith(wrap);
         });
+
+        // Reuse the same math + shiki pipeline as the reader so math and
+        // code blocks render consistently in slides.
+        // Lazy-load katex + shiki (same shape as src/lib/markdown.js) and
+        // run them over Marp's rendered HTML. Skip if the user hasn't
+        // dropped any math / code fences in the deck.
+        const text = marpitDiv.textContent || '';
+        const codeFences = marpitDiv.querySelectorAll('pre code');
+        const tasks = [];
+        if (text.includes('$')) {
+          tasks.push(import('katex').then((mod) => {
+            const katex = mod.default;
+            const walker = document.createTreeWalker(marpitDiv, NodeFilter.SHOW_TEXT, null, false);
+            const targets = [];
+            let n;
+            while ((n = walker.nextNode())) {
+              const p = n.parentNode;
+              if (!p) continue;
+              const tag = p.nodeName;
+              if (tag === 'CODE' || tag === 'PRE' || tag === 'SCRIPT' || tag === 'STYLE') continue;
+              if (!/\$/.test(n.nodeValue)) continue;
+              targets.push(n);
+            }
+            for (const t of targets) {
+              const src = t.nodeValue;
+              // Same regex as markdown.js.
+              const matches = [];
+              const BLOCK = /\$\$([\s\S]+?)\$\$/g;
+              const INLINE = /(?<!\\)\$(?!\s)([^\n$]+?)(?<!\\)\$(?!\d)/g;
+              let m;
+              BLOCK.lastIndex = 0;
+              while ((m = BLOCK.exec(src))) matches.push({ start: m.index, end: m.index + m[0].length, tex: m[1], display: true });
+              INLINE.lastIndex = 0;
+              while ((m = INLINE.exec(src))) {
+                if (matches.some((b) => m.index >= b.start && m.index < b.end)) continue;
+                matches.push({ start: m.index, end: m.index + m[0].length, tex: m[1], display: false });
+              }
+              if (!matches.length) continue;
+              matches.sort((a, b) => a.start - b.start);
+              const frag = document.createDocumentFragment();
+              let lastIndex = 0;
+              for (const match of matches) {
+                if (match.start > lastIndex) frag.appendChild(document.createTextNode(src.slice(lastIndex, match.start)));
+                const span = document.createElement('span');
+                span.className = 'math-render';
+                try { katex.render(match.tex, span, { displayMode: match.display, throwOnError: false }); }
+                catch (_) { span.replaceWith(document.createTextNode(src.slice(match.start, match.end))); lastIndex = match.end; continue; }
+                frag.appendChild(span);
+                lastIndex = match.end;
+              }
+              if (lastIndex < src.length) frag.appendChild(document.createTextNode(src.slice(lastIndex)));
+              t.parentNode.replaceChild(frag, t);
+            }
+          }));
+        }
+        if (codeFences.length) {
+          tasks.push(import('shiki').then(async (shiki) => {
+            // Use the same light/dark dual themes; default to light for
+            // slides (slides are projected on a light background by
+            // default, dark mode in the app swaps the .marpit container
+            // via CSS).
+            const highlighter = await shiki.createHighlighter({
+              themes: ['github-light', 'github-dark'],
+              langs: ['js', 'jsx', 'ts', 'tsx', 'json', 'css', 'html', 'xml', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'cs', 'sql', 'bash', 'shell', 'yaml', 'md'],
+            });
+            marpitDiv.querySelectorAll('pre code').forEach((code) => {
+              // Only process code blocks — not language-mermaid (handled by mermaid)
+              // or live-rendered blocks.
+              if (code.parentElement.closest('pre.mermaid, .svg-block, .html-block, .slide-svg-block, .slide-html-block')) return;
+              const cls = [...code.classList].find((c) => c.startsWith('language-'));
+              if (!cls) return;
+              const lang = cls.slice('language-'.length);
+              if (['mermaid', 'svg', 'html', 'excalidraw'].includes(lang)) return;
+              const resolved = highlighter.getLoadedLanguages().includes(lang) ? lang : 'text';
+              try {
+                const html = highlighter.codeToHtml(code.textContent || '', {
+                  lang: resolved,
+                  themes: { light: 'github-light', dark: 'github-dark' },
+                  defaultColor: 'light',
+                });
+                const tmp = document.createElement('div');
+                tmp.innerHTML = html;
+                const newPre = tmp.firstElementChild;
+                if (newPre && code.parentElement) {
+                  newPre.classList.add('shiki-block');
+                  code.parentElement.replaceWith(newPre);
+                }
+              } catch (e) { /* keep as plain code */ }
+            });
+          }));
+        }
+        // Run them in parallel and wait.
+        await Promise.all(tasks);
         const svgs = Array.from(marpitDiv.querySelectorAll(':scope > svg'));
         // Mark each as a slide for fitToStage() to find.
         svgs.forEach((svg, i) => {

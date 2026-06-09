@@ -141,6 +141,64 @@ if (!navigated) {
     : fail('Inline SVG', `count=${svgInfo.count} hasViewBox=${svgInfo.hasViewBox}`);
 }
 
+// ── 17. Math (katex) renders inline + block ────────────────────────────
+const navigatedMath = await page.evaluate(() => {
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  const math = chapters.find(c => /math/i.test(c.textContent));
+  if (math) { math.click(); return true; }
+  return false;
+});
+if (!navigatedMath) {
+  fail('Math chapter', 'not found in sidebar');
+} else {
+  await new Promise(r => setTimeout(r, 800)); // katex is lazy-loaded
+  const mathInfo = await page.evaluate(() => {
+    const katex = [...document.querySelectorAll('.chapter-markdown .katex')];
+    const display = [...document.querySelectorAll('.chapter-markdown .katex-display')];
+    // Sanity: the source text should not be visible — katex replaces it.
+    const stillRaw = document.querySelector('.chapter-markdown')?.textContent.includes('$E = mc^2$') ?? false;
+    return { inline: katex.length, display: display.length, stillRaw };
+  });
+  mathInfo.inline > 0 && mathInfo.display > 0
+    ? pass(`Katex renders math (${mathInfo.inline} inline, ${mathInfo.display} block)`)
+    : fail('Katex', `inline=${mathInfo.inline} display=${mathInfo.display} raw=${mathInfo.stillRaw}`);
+}
+
+// ── 18. Syntax highlight (shiki) renders code blocks ───────────────────
+const navigatedCode = await page.evaluate(() => {
+  const chapters = [...document.querySelectorAll('.sidebar-chapter')];
+  // Sidebar item text contains both the file name and the rendered title;
+  // match broadly on either "code" or "shiki".
+  const code = chapters.find(c => /code|shiki/i.test(c.textContent));
+  if (code) { code.click(); return true; }
+  return false;
+});
+if (!navigatedCode) {
+  fail('Code chapter', 'not found in sidebar');
+} else {
+  await new Promise(r => setTimeout(r, 1200)); // shiki is lazy-loaded + grammar init
+  const shikiInfo = await page.evaluate(() => {
+    const blocks = [...document.querySelectorAll('.chapter-markdown .shiki-block, .chapter-markdown .shiki')];
+    // Dual theme: shiki emits `style="color:#x;--shiki-dark:#y"` on each
+    // token. The presence of --shiki-dark inline styles confirms the
+    // dual-theme wiring is active.
+    const tokens = [...document.querySelectorAll('.chapter-markdown .shiki-block span, .chapter-markdown .shiki span')];
+    const hasDark = tokens.some(s => s.getAttribute('style')?.includes('--shiki-dark'));
+    // Multiple language classes should be present (one per fenced block).
+    const langs = new Set();
+    for (const b of blocks) {
+      for (const c of b.classList) {
+        const m = c.match(/^language-(\w+)$/);
+        if (m) langs.add(m[1]);
+      }
+    }
+    return { blocks: blocks.length, hasDark, langs: [...langs] };
+  });
+  shikiInfo.blocks > 0 && shikiInfo.hasDark && shikiInfo.langs.length >= 3
+    ? pass(`Shiki highlights code (${shikiInfo.blocks} blocks, langs: ${shikiInfo.langs.join(',')})`)
+    : fail('Shiki', `blocks=${shikiInfo.blocks} hasDark=${shikiInfo.hasDark} langs=${shikiInfo.langs.join(',')}`);
+}
+
 await browser.close();
 
 const failed = results.filter(r => r[0] === 'FAIL');

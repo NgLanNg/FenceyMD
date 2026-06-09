@@ -1728,3 +1728,49 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
   from { opacity: 0; transform: translate(-50%, 6px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MATH (katex) — theme-neutral. katex emits its own colours by default;
+   we override them so math inherits the chapter's text colour in both
+   light and dark. We intentionally do NOT touch the structural CSS that
+   katex ships — only the colour tokens.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.katex { color: var(--ink); }
+.katex .mord, .katex .mop, .katex .mbin, .katex .mrel,
+.katex .mopen, .katex .mclose, .katex .mpunct,
+.katex .minner, .katex .mathnormal, .katex .mathit, .katex .mathrm,
+.katex .mathbf, .katex .mathsf, .katex .mathtt, .katex .mathfrak,
+.katex .mathcal, .katex .mathbb, .katex .mathscr, .katex .mathfrak,
+.katex .boldsymbol { color: var(--ink); }
+.katex .katex-mathml { clip: rect(1px, 1px, 1px, 1px); position: absolute; padding: 0; border: 0; height: 1px; width: 1px; overflow: hidden; }
+/* Display math: center the formula on its own line. */
+.katex-display { margin: 1rem 0; overflow-x: auto; overflow-y: hidden; padding: 0.25rem 0; }
+/* Keep our own math-render wrapper transparent so surrounding paragraphs
+   don't gain a visible box around inline formulas. */
+.math-render { display: inline; }
+/* When the renderer returns a block (displayMode: true), the wrapper
+   becomes a block element on its own line. */
+.math-render:has(.katex-display) { display: block; text-align: center; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SYNTAX HIGHLIGHT (shiki) — dual-theme (light + dark) via CSS variables.
+   Shiki outputs `style="color:#light;--shiki-dark:#dark"` on each span; we
+   swap which one is active based on the root data-theme.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.shiki-block { background: var(--shiki-light-bg, #ffffff); color: var(--shiki-light, #24292f); }
+.shiki-block code { background: transparent; border: none; padding: 0; color: inherit; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.82rem; line-height: 1.7; }
+.shiki { background: var(--shiki-light-bg, #ffffff) !important; color: var(--shiki-light, #24292f) !important; }
+.shiki span { color: var(--shiki-light, #24292f); }
+/* Dark theme overrides — shiki places the dark colour on --shiki-dark. */
+[data-theme="dark"] .shiki { background: var(--shiki-dark-bg, #0d1117) !important; color: var(--shiki-dark, #e6edf3) !important; }
+[data-theme="dark"] .shiki span { color: var(--shiki-dark, #e6edf3); }
+[data-theme="dark"] .shiki span[style*="--shiki-dark-bg"] { background-color: var(--shiki-dark-bg) !important; }
+/* Keep code blocks within the chapter's card. */
+.chapter-markdown .shiki-block {
+  border: 1px solid var(--surface-variant);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  margin-bottom: var(--space-6);
+}
