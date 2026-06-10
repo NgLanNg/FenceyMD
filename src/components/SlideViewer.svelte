@@ -353,6 +353,17 @@
     border-radius: 6px;
     overflow: hidden;
   }
+  /* The Marpit div wraps the SVG and is in the DOM between
+     .slide-svg and the <svg>. Without explicit sizing it falls back
+     to the SVG's intrinsic 1280x720 (since the SVG has width/height
+     attributes set by Marp output), which makes the .marpit 1280x720
+     and overflows the smaller .slide-svg. Set 100%/100% so the
+     viewBox scaling on the SVG actually works. */
+  .marpit {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
   .slide-svg :global(svg) {
     display: block;
     width: 100%;

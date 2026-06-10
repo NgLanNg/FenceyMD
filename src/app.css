@@ -114,7 +114,14 @@
       overflow-x: auto;
     }
     .csv-block table {
-      width: 100%;
+      /* `width: max-content` forces the table to its natural content
+         width (the sum of all column widths). Combined with the
+         .csv-block's overflow-x: auto, a wide table gets a
+         horizontal scrollbar instead of being clipped at the block
+         width. `min-width: 100%` is the floor for narrow data so
+         the table still fills the block. */
+      width: max-content;
+      min-width: 100%;
       border-collapse: collapse;
       font-size: 0.88rem;
       font-family: var(--font-sans);
@@ -422,6 +429,11 @@
       font-size: 1rem;
       line-height: 1.8;
       color: var(--ink);
+      /* Wide tables (markdown `|`-style or HTML <table>) get a
+         horizontal scrollbar INSIDE the article instead of being
+         clipped by an ancestor's overflow: hidden. The .csv-block
+         has its own overflow-x: auto so it doesn't need this. */
+      overflow-x: auto;
     }
     .chapter-markdown h1 {
       font-family: var(--font-serif);
@@ -514,7 +526,13 @@
     }
     .chapter-markdown li { margin-bottom: var(--space-2); line-height: 1.7; }
     .chapter-markdown table {
-      width: 100%;
+      /* Same trick as .csv-block table: max-content so the table
+         grows to its natural column width. Combined with the
+         .chapter-markdown's overflow-x: auto (set above), a wide
+         markdown table gets a horizontal scrollbar inside the
+         article instead of being clipped. */
+      width: max-content;
+      min-width: 100%;
       border-collapse: collapse;
       margin-bottom: var(--space-6);
       font-size: 0.88rem;

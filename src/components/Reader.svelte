@@ -358,12 +358,22 @@
   // ROADMAP v1.1 #17 — ? opens the cheatsheet modal. The cheatsheet
   // modal is intentionally NOT a focus trap (it's a hint, not a
   // workflow) — Esc/click-outside both close it.
+  //
+  // When slide view is active, SlideViewer.svelte owns the keyboard
+  // (arrows / Space / PageUp / PageDown / Home / End / Esc for
+  // slide nav). If we let the Reader's arrow handler fire too,
+  // pressing → in slide mode would BOTH advance the slide AND
+  // navigate to the next chapter — the chapter change unmounts the
+  // SlideViewer, so the user sees the slide jump followed by an
+  // unexpected chapter jump and slide view exiting. Bail early here
+  // so the SlideViewer's handler is the only one that fires.
   let showCheatsheet = $state(false);
   let lastGAt = 0;
   function onKey(e) {
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
     if (editing) return;
+    if (inSlideMode) return;
     // ? opens the cheatsheet. The Shift+/ chord comes out as e.key === '?' on US layouts.
     if (e.key === '?' && showCheatsheet) {
       showCheatsheet = false;
