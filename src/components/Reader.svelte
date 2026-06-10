@@ -8,10 +8,15 @@
     saveProgress, progressFor, toggleBookmark, adjustFontSize, adjustContentWidth, toggleTheme,
     fontSizeLabels, renameFile,
     navCollapsed, navOpen, viewMode, toggleViewMode,
+    onboarded, dismissOnboarding,
   } from '../lib/stores.js';
+  import { pendingInChapterSearch } from '../lib/stores/state.js';
+  import { chapterScrollFrac } from '../lib/stores/progress.js';
   import { hasMultipleSlides } from '../lib/slides.js';
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
+  import OutlinePane from './OutlinePane.svelte';
+  import { outlineVisible, isOutlineVisible, toggleOutline } from '../lib/stores/prefs.js';
 
   let { path, isMobile = false } = $props();
 
@@ -74,10 +79,64 @@
   const inSlideMode = $derived($viewMode === 'slide' && slideCapable);
   function exitSlide() { viewMode.set('read'); }
   const wordCount = $derived(text.trim().split(/\s+/).length);
+
+  // ROADMAP v1.1 #12 — reading time + word count in chapter header.
+  // We strip markdown chrome (fences, headings, link syntax, code
+  // spans) before counting, so a chapter with 200 lines of ```js
+  // doesn't inflate the "words" number. Then `ceil(words / 220)`
+  // gives a Vim-style "5 min" reading time.
+  function stripMarkdown(s) {
+    return s
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
+      .replace(/(\*\*|__|\*|_|~~|`)/g, '')
+      .replace(/^\s{0,3}>\s?/gm, '')
+      .replace(/^\s{0,3}[-*+]\s+/gm, '')
+      .replace(/^\s{0,3}\d+\.\s+/gm, '')
+      .replace(/^[-*_]{3,}\s*$/gm, ' ');
+  }
+  const proseText = $derived(stripMarkdown(text));
+  const proseWordCount = $derived(proseText.trim() ? proseText.trim().split(/\s+/).length : 0);
+  const readingMinutes = $derived(proseWordCount > 0 ? Math.max(1, Math.ceil(proseWordCount / 220)) : 0);
+  const wordCountLabel = $derived(
+    proseWordCount >= 1000
+      ? (proseWordCount / 1000).toFixed(proseWordCount >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k'
+      : String(proseWordCount)
+  );
+  const readingTimeLabel = $derived(
+    readingMinutes > 0 ? `${readingMinutes} min · ${wordCountLabel} words` : `${wordCountLabel} words`
+  );
   const mdTitle = $derived((text.match(/^#\s+(.+)$/m)?.[1] || labelFromName(item?.name || path)).trim());
   const backLabel = $derived(sib.group || 'Library');
 
   let progressBar = $state(0);
+
+  // ROADMAP v1.1 #3 — auto-TOC outline pane visibility.
+  // The store keeps a tri-state ('1' / '0' / 'auto'); we resolve 'auto'
+  // against the current viewport on every read. On viewport changes
+  // (resize, mobile <-> desktop) we re-resolve, so a chapter on a
+  // desktop stays expanded, then auto-collapses if the window is
+  // narrowed. The first explicit user toggle pins the value to '1'
+  // or '0' so we stop auto-resolving.
+  let viewportW = $state(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => { viewportW = window.innerWidth; };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
+  const outlineOpen = $derived(isOutlineVisible($outlineVisible, viewportW));
+  // Wrapper class for the reader — adds an `outline-on` hook so CSS can
+  // shift toolbar right-padding when the pane is showing, keeping the
+  // article centred in the remaining space.
+  const readerCls = $derived('reader2' + (outlineOpen ? ' outline-on' : ''));
+  // Pane's onclose (Esc / click outside the X) — pin the store to '0'
+  // so the pane stays closed even when the viewport is wide. The user
+  // can re-open with the toolbar button or ⌘\, which then flips to '1'.
+  function closeOutline() { outlineVisible.set('0'); }
 
   // Re-enhance + restore scroll whenever the chapter (or its html) changes.
   // Close the editor whenever the chapter's rendered HTML changes (external update or save).
@@ -120,6 +179,10 @@
     const docH = document.documentElement.scrollHeight - window.innerHeight;
     const frac = docH > 0 ? window.scrollY / docH : 0;
     progressBar = frac * 100;
+    // ROADMAP v1.1 #13 — publish the scroll fraction to the sidebar
+    // store so the progress dot in the chapter list can render in
+    // real time. Capped to [0, 1] in case of rounding overshoot.
+    chapterScrollFrac.set(Math.max(0, Math.min(1, frac)));
     if (!editing && item) {
       const pr = progressFor(item.diskPath || item.path);
       saveProgress(item.diskPath || item.path, frac, pr.bookmarked);
@@ -156,6 +219,19 @@
     if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   $effect(() => { searchQuery; runSearch(); });
+
+  // Pick up a pending in-chapter search string set by the cross-chapter
+  // search panel when the user picks a result. We clear the pending value
+  // immediately so a re-mount on the same chapter (e.g. via watcher reload)
+  // doesn't get the same query re-applied, then let the runSearch effect
+  // above re-highlight based on the updated searchQuery.
+  $effect(() => {
+    const pending = $pendingInChapterSearch;
+    if (pending) {
+      searchQuery = pending;
+      pendingInChapterSearch.set('');
+    }
+  });
 
   function copyLink() {
     const url = location.origin + location.pathname + '?load=' + encodeURIComponent(path);
@@ -278,12 +354,56 @@
   }
 
   // Keyboard: ← / → move between chapters when not typing.
+  // ROADMAP v1.1 #13 — g g (two g's within 500ms) jumps to top, G to bottom.
+  // ROADMAP v1.1 #17 — ? opens the cheatsheet modal. The cheatsheet
+  // modal is intentionally NOT a focus trap (it's a hint, not a
+  // workflow) — Esc/click-outside both close it.
+  let showCheatsheet = $state(false);
+  let lastGAt = 0;
   function onKey(e) {
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
     if (editing) return;
+    // ? opens the cheatsheet. The Shift+/ chord comes out as e.key === '?' on US layouts.
+    if (e.key === '?' && showCheatsheet) {
+      showCheatsheet = false;
+      e.preventDefault();
+      return;
+    }
+    if (e.key === '?' && !showCheatsheet) {
+      showCheatsheet = true;
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Escape' && showCheatsheet) {
+      showCheatsheet = false;
+      e.preventDefault();
+      return;
+    }
     if (e.key === 'ArrowLeft' && sib.prev) goChapter(sib.prev.path);
     else if (e.key === 'ArrowRight' && sib.next) goChapter(sib.next.path);
+    else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      // ROADMAP v1.1 #3 — ⌘\ toggles the auto-TOC outline pane.
+      // preventDefault so the browser doesn't steal the keystroke
+      // (e.g. Chrome's "quit" hint on ⌘\).
+      e.preventDefault();
+      toggleOutline();
+    }
+    else if (e.key === 'g' || e.key === 'G') {
+      const now = performance.now();
+      if (e.key === 'G') {
+        e.preventDefault();
+        const docH = document.documentElement.scrollHeight - window.innerHeight;
+        window.scrollTo({ top: docH, behavior: 'smooth' });
+        lastGAt = 0;
+      } else if (now - lastGAt < 500) {
+        e.preventDefault();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        lastGAt = 0;
+      } else {
+        lastGAt = now;
+      }
+    }
   }
 </script>
 
@@ -292,7 +412,7 @@
 {#if editing}
   <Editor {item} oncancel={() => (editing = false)} onsaved={() => (editing = false)} />
 {:else}
-<div class="reader2">
+<div class={readerCls}>
   <!-- Reading progress, fixed to viewport top -->
   <div class="reader2-progress" aria-hidden="true"><div class="reader2-progress-fill" style="width:{progressBar}%"></div></div>
 
@@ -326,6 +446,16 @@
         <div class="reader2-tool-group">
           <button class="tool-btn" onclick={toggleTheme} title="Toggle dark mode" aria-label="Toggle dark mode">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          </button>
+          <button
+            class="tool-btn"
+            class:active={outlineOpen}
+            onclick={toggleOutline}
+            title="Toggle outline (⌘\\)"
+            aria-label="Toggle outline"
+            aria-pressed={outlineOpen}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
           </button>
           <button
             class="tool-btn"
@@ -370,7 +500,7 @@
     <article class="reader2-article">
     <header class="reader2-header">
       <h1 class="reader2-title">{mdTitle}</h1>
-      <div class="reader2-meta">{path} · {wordCount.toLocaleString()} words</div>
+      <div class="reader2-meta">{path} · {readingTimeLabel}</div>
     </header>
 
     {#key $theme}
@@ -426,5 +556,58 @@
       </div>
     </div>
   {/if}
+
+  <!-- ROADMAP v1.1 #16 — first-launch onboarding hint. Sits as a
+       small pill just inside the reader, pointing at the sidebar
+       with a chevron. Dismiss persists in localStorage; once gone,
+       it never comes back. -->
+  {#if !$onboarded}
+    <div class="onboard-hint" role="status" aria-live="polite">
+      <div class="onboard-hint-arrow" aria-hidden="true"></div>
+      <div class="onboard-hint-body">
+        <span class="onboard-hint-text">Pick a folder to start — Markdown, HTML, even Excalidraw scenes render in place.</span>
+        <button class="onboard-hint-dismiss" onclick={dismissOnboarding} aria-label="Dismiss onboarding hint">Got it</button>
+      </div>
+    </div>
+  {/if}
+
+  <!-- ROADMAP v1.1 #17 — keyboard cheatsheet. Tiny modal listing
+       every shortcut the reader ships with. NOT a focus trap (per
+       spec): Esc and click-outside both close. -->
+  {#if showCheatsheet}
+    <div
+      class="cheatsheet-backdrop"
+      onclick={(e) => { if (e.target === e.currentTarget) showCheatsheet = false; }}
+      role="presentation"
+    >
+      <div class="cheatsheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <div class="cheatsheet-head">
+          <span class="cheatsheet-title">Keyboard shortcuts</span>
+          <button class="cheatsheet-close" onclick={() => (showCheatsheet = false)} aria-label="Close cheatsheet">×</button>
+        </div>
+        <div class="cheatsheet-list">
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>←</kbd> <kbd>→</kbd></span><span>Previous / next chapter</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>F</kbd></span><span>Find in chapter</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>F</kbd></span><span>Search across chapters</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>P</kbd></span><span>Export chapter as PDF</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>S</kbd></span><span>Save (in edit mode)</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>e</kbd></span><span>Edit current chapter</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>Esc</kbd></span><span>Clear search / close</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>g</kbd><kbd>g</kbd></span><span>Jump to top of chapter</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>G</kbd></span><span>Jump to bottom of chapter</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>?</kbd></span><span>Show this cheatsheet</span></div>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- ROADMAP v1.1 #3 — auto-TOC outline pane. The pane is always
+       mounted (so the IntersectionObserver is wired as soon as the
+       Reader mounts) but its `visible` flag mirrors the
+       auto-resolved `outlineOpen` state. Esc/click-outside close
+       pins the store to '0' so the user can opt out of the
+       auto-resolved default. ⌘\ / toolbar toggle is owned by
+       `toggleOutline()` above. -->
+  <OutlinePane mdEl={mdEl} visible={outlineOpen} onclose={closeOutline} />
 </div>
 {/if}

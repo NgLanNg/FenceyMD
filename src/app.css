@@ -898,6 +898,52 @@ html, body { height: 100%; }
   gap: 2px;
 }
 
+/* Find/Replace panel (#15) — sits under the toolbar, stretches the
+   full width of the editor shell. Subtle background so it's clearly
+   modal-ish but doesn't fight the rest of the chrome. */
+.editor-find-replace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--surface-container-low);
+  border-bottom: 1px solid var(--surface-variant);
+}
+.editor-find-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.editor-find-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-weight: 600;
+  flex: 1;
+}
+.editor-find-input {
+  flex: 1;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--surface-variant);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+}
+.editor-find-input:focus {
+  border-color: var(--tertiary, #2a8b8b);
+}
+.editor-find-status {
+  font-size: 11px;
+  color: var(--ink-muted);
+  min-width: 70px;
+  text-align: right;
+}
+
 @media (max-width: 900px) {
   .notion-editor-inner { padding: 32px 32px 80px; }
   .notion-split.has-preview { flex-direction: column; }
@@ -1827,4 +1873,212 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
   border-radius: var(--radius-md);
   padding: var(--space-6);
   margin-bottom: var(--space-6);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   CROSS-CHAPTER SEARCH PANEL (⌘⇧F)
+   Slides down from the top, occupying the upper third of the viewport.
+   Backdrop dims the rest of the app; click outside or Esc closes.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.xsearch-backdrop {
+  position: fixed; inset: 0; z-index: 95;
+  background: rgba(20, 20, 22, 0.28);
+  animation: fade-in 0.12s ease;
+}
+
+.xsearch-panel {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 33vh;
+  min-height: 280px;
+  max-height: 480px;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-bottom: 1px solid var(--surface-variant);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+  animation: xsearch-slide-down 0.18s ease-out;
+}
+
+@keyframes xsearch-slide-down {
+  from { transform: translateY(-12px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+.xsearch-inputrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--surface-variant);
+  background: var(--surface-container-lowest);
+  flex-shrink: 0;
+}
+
+.xsearch-icon {
+  width: 18px; height: 18px;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+.xsearch-input {
+  flex: 1;
+  min-width: 0;
+  border: none; outline: none; background: transparent;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ink);
+  padding: var(--space-1) 0;
+}
+.xsearch-input::placeholder {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.xsearch-shortcut {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.xsearch-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+}
+
+.xsearch-empty {
+  padding: var(--space-6);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink-muted);
+  text-align: center;
+}
+.xsearch-empty em {
+  font-style: normal;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.xsearch-result {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: var(--space-3) var(--space-6);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.08s ease, border-color 0.08s ease;
+}
+.xsearch-result.active {
+  background: var(--surface-container-low);
+  border-left-color: var(--tertiary);
+}
+.xsearch-result:hover {
+  background: var(--surface-container-lowest);
+}
+
+.xsearch-result-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--font-serif);
+  font-size: 14px;
+  margin-bottom: 3px;
+  min-width: 0;
+}
+.xsearch-result-name {
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.xsearch-result-path {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 50%;
+}
+
+.xsearch-result-snippet {
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.xsearch-result-snippet mark {
+  background: #fef08a;
+  color: var(--ink);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+[data-theme="dark"] .xsearch-result-snippet mark {
+  background: #713f12;
+  color: #fef3c7;
+}
+
+.xsearch-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-6);
+  border-top: 1px solid var(--surface-variant);
+  background: var(--surface-container-lowest);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+.xsearch-foot-meta {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.xsearch-foot-hint kbd {
+  display: inline-block;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  margin: 0 1px;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  border: 1px solid var(--surface-variant);
+  border-radius: 3px;
+  vertical-align: 1px;
+}
+
+@media (max-width: 640px) {
+  .xsearch-panel { height: 50vh; min-height: 320px; }
+  .xsearch-inputrow { padding: var(--space-3) var(--space-4); }
+  .xsearch-result { padding: var(--space-3) var(--space-4); }
+  .xsearch-foot { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+  .xsearch-foot-hint { font-size: 10px; }
+}
+
+/* ── Print: hide the panel + backdrop ────────────────────────────────── */
+@media print {
+  .xsearch-panel, .xsearch-backdrop { display: none !important; }
 }

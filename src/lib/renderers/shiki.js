@@ -1,8 +1,22 @@
 // Shiki fence renderer — code-fence syntax highlighter. Lazy-loads shiki
-// with the language + theme bundle. Dual-theme: the same code block
-// re-themes when [data-theme] changes on <html> because each token
-// carries both a light color and a `--shiki-dark` inline variable, and
-// the `.shiki-block` rule in app.css swaps which one is used.
+// with the language + theme bundle.
+//
+// For the default 'github' code theme (#8 in ROADMAP v1.1), we use the
+// dual-theme trick: each token carries `style="color:#light;
+// --shiki-dark:#dark"`, and the `.shiki-block` rule in app.css swaps
+// which color is active based on the root data-theme. This means the
+// chapter re-themes instantly when the user toggles light/dark mode.
+//
+// For the 'nord' code theme (#8), we use a single-theme render — shiki
+// emits `style="color:#nordToken"` only. The CSS forces the nord
+// background and the spans keep their inline token colors regardless of
+// the app's light/dark mode. The user picked a deliberately dark code
+// style, so we honor that even when the rest of the app is in light mode.
+//
+// If the user changes the code theme while a chapter is on screen, the
+// `setCodeTheme()` export walks the live DOM, restores each shiki
+// block to its original `<pre><code>` (carried as `data-source`), and
+// re-highlights. The reader doesn't have to reload.
 //
 // This is the `defaultFor: "code"` renderer — the registry falls
 // back to it for unknown fence languages (```js, ```ts, etc.).
@@ -17,14 +31,19 @@ import { register, wrapWithCopyButton } from '../registry.js';
 
 let _shiki = null;
 let _shikiReady = null;
+let _codeTheme = 'github';
+let _dark = false;
 
 async function getShiki() {
   if (_shiki) return _shiki;
   if (!_shikiReady) {
     _shikiReady = (async () => {
       const shiki = await import('shiki');
+      // Bundle all three themes we ship. Adding more later is a one-line
+      // change here + a new branch in `pickThemes()` + a matching CSS
+      // rule for [data-code-theme="..."].
       const highlighter = await shiki.createHighlighter({
-        themes: ['github-light', 'github-dark'],
+        themes: ['github-light', 'github-dark', 'nord'],
         langs: [
           'js', 'jsx', 'ts', 'tsx', 'json', 'css', 'html', 'xml',
           'py', 'rs', 'go', 'java', 'c', 'cpp', 'cs',
@@ -38,6 +57,21 @@ async function getShiki() {
     })();
   }
   return _shikiReady;
+}
+
+// Pick the shiki `themes` option based on the active code theme. The
+// `defaultColor` controls which side of the dual theme shiki considers
+// the "primary" one for the wrapper's own background/color.
+function pickThemes(codeTheme, dark) {
+  if (codeTheme === 'nord') {
+    // Single dark theme — shiki emits one color per span and uses
+    // nord's own background. CSS for [data-code-theme="nord"] forces
+    // #2E3440 as the wrapper background regardless of app mode.
+    return { themes: 'nord', defaultColor: 'dark' };
+  }
+  // Default: dual github-light / github-dark. Spans carry
+  // `--shiki-dark` inline variables; CSS swaps which is active.
+  return { themes: { light: 'github-light', dark: 'github-dark' }, defaultColor: dark ? 'dark' : 'light' };
 }
 
 function pickLang(codeEl, highlighter) {
@@ -73,22 +107,27 @@ async function highlightIn(area, dark) {
     _donePres.add(pre);
     const lang = pickLang(el, highlighter);
     const code = el.textContent || '';
+    const originalClasses = [...el.classList];
     try {
+      const { themes, defaultColor } = pickThemes(_codeTheme, dark);
       const html = highlighter.codeToHtml(code, {
         lang,
-        themes: { light: 'github-light', dark: 'github-dark' },
-        defaultColor: dark ? 'dark' : 'light',
+        themes,
+        defaultColor,
       });
       const tmp = document.createElement('div');
       tmp.innerHTML = html;
       const newPre = tmp.firstElementChild;
       if (newPre) {
         newPre.classList.add('shiki-block');
-        // Preserve the existing pre's classes (defensive: matches the
-        // pre-Phase 2 behavior so we don't break tests that look for
-        // `language-X` on the wrapper).
+        // Stash the original source so a code-theme switch can re-render
+        // this block without re-fetching the chapter. Without this we'd
+        // need to reload the whole chapter to apply a new code theme.
+        newPre.dataset.source = code;
+        // Preserve the original language class on the wrapper (defensive:
+        // matches pre-Phase 2 behavior and lets the e2e test count langs).
         for (const c of [...pre.classList]) newPre.classList.add(c);
-        for (const c of [...el.classList]) {
+        for (const c of originalClasses) {
           if (c.startsWith('language-') && !newPre.classList.contains(c)) newPre.classList.add(c);
         }
         pre.replaceWith(newPre);
@@ -103,6 +142,36 @@ async function highlightIn(area, dark) {
   }
 }
 
+// Restore a shiki-rendered block back to its original `<pre><code>…</code></pre>`
+// shape so `highlightIn` can re-render it. No-op if the block wasn't carrying
+// a `data-source` (defensive — we only stash it on blocks we own).
+function restoreShikiBlocks(area) {
+  const rendered = area.querySelectorAll('pre.shiki, pre.shiki-block');
+  for (const pre of rendered) {
+    const src = pre.dataset.source;
+    if (src == null) continue;
+    const fresh = document.createElement('pre');
+    // Pull the language-X class off the rendered pre so pickLang() can
+    // resolve the grammar. Default to 'text' if the class is missing.
+    const langCls = [...pre.classList].find((c) => c.startsWith('language-'));
+    const code = document.createElement('code');
+    if (langCls) code.className = langCls;
+    else code.className = 'language-text';
+    code.textContent = src;
+    fresh.appendChild(code);
+    // Unwrap the .code-block-wrapper that wrapWithCopyButton created so
+    // the new pre is the same DOM shape the registry saw on first pass.
+    const wrap = pre.closest('.code-block-wrapper');
+    if (wrap && wrap.parentNode) {
+      wrap.parentNode.replaceChild(fresh, wrap);
+    } else if (pre.parentNode) {
+      pre.parentNode.replaceChild(fresh, pre);
+    }
+    // Forget the old pre so _donePres doesn't short-circuit the re-render.
+    _donePres.delete(pre);
+  }
+}
+
 register('shiki', {
   kind: 'fence',
   defaultFor: 'code',
@@ -110,7 +179,8 @@ register('shiki', {
   async render(block, ctx) {
     const area = ctx.area;
     if (!area) return;
-    await highlightIn(area, !!ctx.dark);
+    _dark = !!ctx.dark;
+    await highlightIn(area, _dark);
   },
 });
 
@@ -119,3 +189,27 @@ register('shiki', {
 export async function highlightCodeBlocks(area, dark) {
   return highlightIn(area, dark);
 }
+
+// Set the active code theme. If the theme changed, re-render every shiki
+// block visible right now by restoring + re-highlighting in place. No-op
+// when the theme is the same as the current value (avoids pointless
+// work on hot reloads / initial mount).
+export function setCodeTheme(themeName) {
+  if (themeName === _codeTheme) return;
+  _codeTheme = themeName;
+  if (typeof document === 'undefined') return;
+  for (const area of document.querySelectorAll('.chapter-markdown')) {
+    restoreShikiBlocks(area);
+    highlightIn(area, _dark).catch((e) => console.warn('[shiki retheme]', e?.message || e));
+  }
+}
+
+// Initialize from the data-attribute set by the prefs store. This is
+// what lets a fresh page load pick up the persisted value before the
+// first render runs.
+function readInitialCodeTheme() {
+  if (typeof document === 'undefined') return;
+  const v = document.documentElement.getAttribute('data-code-theme');
+  if (v) _codeTheme = v;
+}
+readInitialCodeTheme();

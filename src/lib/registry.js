@@ -120,6 +120,8 @@ export async function dispatch(block, ctx) {
   }
 }
 
+import { stampAnchors } from './anchors.js';
+
 // ── Block discovery ────────────────────────────────────────────────────────
 
 /** Walk the area and dispatch every fence that has a registered
@@ -192,6 +194,12 @@ export async function enhance(area, meta = {}) {
   //    its own copy mechanism; this catches blocks shiki didn't touch
   //    because they're inside a pre.mermaid / .svg-block / etc.).
   attachCopyButtons(area);
+
+  // 4. Stable block anchors (ROADMAP v1.1 #23) — last step, so it
+  //    sees the post-render DOM. `stampAnchors` is idempotent: re-runs
+  //    on the same area are no-ops, so callers can call `enhance()`
+  //    freely on every chapter navigation.
+  stampAnchors(area);
 }
 
 // Wrap a `<pre>` in a `.code-block-wrapper` with a copy button. Used

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { TAURI } from './lib/tauri.js';
   import {
-    ready, route, navCollapsed, navOpen,
+    ready, route, navCollapsed, navOpen, reopenLast,
     openLast, openScanResult, setupWatcherListener,
   } from './lib/stores.js';
   import Picker from './components/Picker.svelte';
@@ -10,6 +10,12 @@
   import Library from './components/Library.svelte';
   import Reader from './components/Reader.svelte';
   import Settings from './components/Settings.svelte';
+  import CrossSearchPanel from './components/CrossSearchPanel.svelte';
+  // ROADMAP v1.1 #2 — cross-chapter search. The panel itself manages
+  // its own focus / input; App.svelte owns the global ⌘⇧F / Ctrl+⇧F
+  // shortcut so it works regardless of which view is mounted (Home,
+  // Library, Reader, Settings).
+  import { crossSearchOpen } from './lib/stores/state.js';
 
   let isMobile = $state(false);
 
@@ -33,9 +39,11 @@
     const params = new URLSearchParams(location.search);
     if (params.get('test') === '1') {
       await loadTestData();
-    } else if (TAURI) {
-      // Continue where you left off; first launch (nothing remembered) falls
-      // through to the Home screen. The sidebar Home button returns here.
+    } else if (TAURI && $reopenLast) {
+      // ROADMAP v1.1 #10 — gated on the "Reopen last folder on launch"
+      // preference (default: on). First launch (nothing remembered) still
+      // falls through to the Home screen. The sidebar Home button
+      // returns here.
       await openLast();
     }
 
@@ -117,7 +125,21 @@
     if (isMobile && $navOpen) c += ' nav-open';
     return c;
   }
+
+  // ROADMAP v1.1 #2 — ⌘⇧F (mac) / Ctrl+⇧F (others) toggles the
+  // cross-chapter search panel. We mount this on App.svelte so the
+  // shortcut works from any view (Picker / Library / Reader / Settings)
+  // and is a single listener, not one per child.
+  function onAppKey(e) {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+      e.preventDefault();
+      crossSearchOpen.update((v) => !v);
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onAppKey} />
 
 {#if !$ready}
   <Picker />
@@ -149,4 +171,5 @@
     </main>
   </div>
   <Settings />
+  <CrossSearchPanel />
 {/if}

@@ -41,3 +41,19 @@ export async function printPDF(title, chapterHtml, dark, vars) {
 export async function updateExcalidrawBlock(folder, relPath, blockIndex, newInner) {
   return invoke('update_excalidraw_block', { folder, relPath, blockIndex, newInner });
 }
+
+/** Save a pasted clipboard image (PNG bytes) into `<folder>/<relPath>`,
+ *  creating the parent dir if missing. The Rust side rejects any `relPath`
+ *  that would escape the folder (same canonicalize check as `write_file`).
+ *  Returns the absolute path actually written. */
+export async function saveClipboardImage(folder, relPath, bytes) {
+  return invoke('save_clipboard_image', { folder, relPath, bytes: Array.from(bytes) });
+}
+
+/** Open `path` in the user's external editor. `editorOverride` is the
+ *  per-user setting from `md-reader-external-editor` localStorage; when
+ *  null/empty the Rust side falls back to the OS default (`open -t` /
+ *  `xdg-open` / `cmd /c start`). */
+export async function openInExternalEditor(path, editorOverride) {
+  return invoke('open_in_external_editor', { path, editorOverride: editorOverride || null });
+}

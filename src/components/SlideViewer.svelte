@@ -29,6 +29,10 @@
   // (svg, html, mermaid, excalidraw, math, shiki).
   import '../lib/renderers/index.js';
   import { addDiagramTools } from '../lib/diagram-export.js';
+  // ROADMAP v1.1 #23 — stamp stable `data-md-anchor="slide-N"` on each
+  // Marpit slide so cross-chapter link / AI-edit primitives can address
+  // a specific slide by a stable address.
+  import { stampSlides } from '../lib/anchors.js';
 
   let { markdown = '', onExit } = $props();
 
@@ -149,6 +153,9 @@
             ctx,
           );
         }
+        // ROADMAP v1.1 #23 — stamp stable slide anchors before we
+        // extract the per-slide SVGs.
+        stampSlides(marpitDiv);
         const svgs = Array.from(marpitDiv.querySelectorAll(':scope > svg'));
         // Mark each as a slide for fitToStage() to find.
         svgs.forEach((svg, i) => {

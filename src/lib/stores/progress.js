@@ -1,12 +1,19 @@
 // Per-file reading progress + bookmarks. Persisted to the Tauri backend, or to
 // localStorage in browser/dev mode.
-import { get } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import { TAURI, invoke } from '../tauri.js';
 import { progressMap, folderRoot, folderName } from './state.js';
 
 export function progressFor(diskPath) {
   return get(progressMap)[diskPath] || { scroll: 0, bookmarked: false };
 }
+
+// ROADMAP v1.1 #13 — live scroll progress of the currently open
+// chapter, expressed as a fraction in [0, 1]. Sidebar reads this
+// store to render a small progress dot in the chapter list. Reader
+// writes on every scroll event. Lives in progress.js (next to
+// progressMap) so the data path is obvious.
+export const chapterScrollFrac = writable(0);
 
 export async function loadProgress() {
   const root = get(folderRoot);

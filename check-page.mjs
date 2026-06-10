@@ -1,0 +1,10 @@
+import puppeteer from 'puppeteer-core';
+const browser = await puppeteer.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: 'new', args: ['--no-sandbox'] });
+const page = await browser.newPage();
+page.on('console', m => console.log('[console]', m.type(), m.text()));
+page.on('pageerror', e => console.log('[pageerror]', e.message));
+await page.goto('http://localhost:1420?test=1', { waitUntil: 'networkidle0' });
+await new Promise(r => setTimeout(r, 2500));
+const html = await page.evaluate(() => document.body.innerHTML.slice(0, 800));
+console.log('body html:', html);
+await browser.close();

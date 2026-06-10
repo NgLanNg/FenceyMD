@@ -427,6 +427,90 @@ fn copy_image(bytes: Vec<u8>) -> Result<(), String> {
     cb.set_image(data).map_err(|e| e.to_string())
 }
 
+/// Save a pasted clipboard image as `<folder>/<rel_path>` and return the
+/// absolute path actually written. `rel_path` is relative to `folder` and is
+/// canonicalize-checked against the chosen folder — same traversal defense
+/// as `write_file`. The directory containing the file is created if it
+/// doesn't already exist (so pasting into a chapter's `images/` subdir
+/// works on the first paste). Used by the editor's ⌘V handler.
+#[tauri::command]
+fn save_clipboard_image(folder: String, rel_path: String, bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.is_empty() {
+        return Err("empty image bytes".into());
+    }
+    let root = Path::new(&folder);
+    let target = root.join(&rel_path);
+    // Reject traversal: the canonicalized parent must stay inside the root.
+    // The parent may not exist yet (we create it below), so we walk up
+    // until we find a directory that does and use *its* canonical path
+    // for the bounds check — that way refusing "../escape.png" works
+    // even when no `images/` dir exists yet.
+    let mut probe = target.clone();
+    let ancestor = loop {
+        let parent = match probe.parent() {
+            Some(p) => p,
+            None => return Err("invalid path".into()),
+        };
+        if parent.as_os_str().is_empty() { return Err("invalid path".into()); }
+        if parent.is_dir() { break parent.to_path_buf(); }
+        match parent.file_name() {
+            Some(_) => probe = parent.to_path_buf(),
+            None => return Err("invalid path".into()),
+        }
+    };
+    let root_canon = root.canonicalize().map_err(|e| e.to_string())?;
+    let ancestor_canon = ancestor.canonicalize().map_err(|e| e.to_string())?;
+    if !ancestor_canon.starts_with(&root_canon) {
+        return Err("refusing to write outside the selected folder".into());
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+/// Open `path` in the user's external editor / OS handler. Honors a
+/// per-user override stored on the frontend (the editor command is
+/// passed as `editor_override`; if set we run that, otherwise we fall
+/// back to the OS default). On macOS we use `open -t` so the file opens
+/// in TextEdit (the universal fallback) — `open` without `-t` would
+/// open the user's default app for that extension, which is usually
+/// fine but `-t` is the explicit "give me an editor" affordance.
+#[tauri::command]
+fn open_in_external_editor(path: String, editor_override: Option<String>) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("file not found".into());
+    }
+    if let Some(editor) = editor_override {
+        let trimmed = editor.trim();
+        if !trimmed.is_empty() {
+            let mut parts = trimmed.split_whitespace();
+            let bin = parts.next().unwrap_or(trimmed);
+            let rest: Vec<&str> = parts.collect();
+            let mut cmd = Command::new(bin);
+            for a in rest { cmd.arg(a); }
+            return cmd.arg(p).spawn().map(|_| ()).map_err(|e| format!("failed to spawn `{trimmed}`: {e}"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-t").arg(p).spawn()
+            .map(|_| ()).map_err(|e| format!("open -t failed: {e}"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(p).spawn()
+            .map(|_| ()).map_err(|e| format!("xdg-open failed: {e}"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd").args(["/c", "start", "", &path]).spawn()
+            .map(|_| ()).map_err(|e| format!("start failed: {e}"))
+    }
+}
+
 /// Rename a markdown file within the folder. `rel_path` is relative to `folder`;
 /// `new_name` is just the new file name (extension added if missing). Refuses to
 /// escape the folder or overwrite an existing file. Returns the new relative path.
@@ -1248,6 +1332,8 @@ fn main() {
             save_export,
             print_pdf,
             copy_image,
+            save_clipboard_image,
+            open_in_external_editor,
             rename_file,
             watch_folder,
             scan_path,
@@ -1262,7 +1348,13 @@ mod tests {
     use std::fs;
 
     fn fixture() -> PathBuf {
-        let base = std::env::temp_dir().join("mdreader_test_book");
+        // Per-test unique temp dir so parallel execution doesn't race
+        // on a fixed path. The old single-name fixture flaked when one
+        // test removed the dir while another was reading from it.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let base = std::env::temp_dir().join(format!("mdreader_test_book_{pid}_{n}"));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("part-i")).unwrap();
         fs::create_dir_all(base.join(".hidden")).unwrap();
@@ -1277,13 +1369,19 @@ mod tests {
     fn scans_md_skips_txt_and_hidden() {
         let base = fixture();
         let r = scan_folder(&base);
-        assert_eq!(r.folder_name, "mdreader_test_book");
+        // Folder name embeds the pid + counter (see fixture()) — assert
+        // it matches the path's leaf rather than a literal string.
+        assert!(r.folder_name.starts_with("mdreader_test_book"));
+        assert_eq!(
+            r.folder_name,
+            base.file_name().unwrap().to_string_lossy().to_string()
+        );
         let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, vec!["intro.md", "part-i/ch1.md"]);
         let ch1 = r.files.iter().find(|f| f.path == "part-i/ch1.md").unwrap();
         assert_eq!(ch1.content, "# Ch1\nbody");
         assert_eq!(ch1.name, "ch1.md");
-        assert!(r.root.ends_with("mdreader_test_book"));
+        assert!(r.root.ends_with(&r.folder_name));
     }
 
     #[test]
@@ -1328,7 +1426,10 @@ mod tests {
             .expect("ipc command should succeed")
             .deserialize::<serde_json::Value>()
             .unwrap();
-        assert_eq!(json["folder_name"], "mdreader_test_book");
+        // Folder name is per-test unique now — confirm it parses and starts
+        // with the canonical prefix.
+        let folder_name = json["folder_name"].as_str().unwrap();
+        assert!(folder_name.starts_with("mdreader_test_book"));
         assert_eq!(json["files"].as_array().unwrap().len(), 2);
     }
 
@@ -1550,5 +1651,74 @@ A --> B
         let after2 = std::fs::read_to_string(&file).unwrap();
         assert!(after2.contains("\"id\":\"newer\""));
         assert!(!after2.contains("\"id\":\"new\""));
+    }
+
+    /// The editor's ⌘V clipboard-image handler calls `save_clipboard_image`
+    /// with bytes the user just pasted. The command must:
+    ///  1. Write the bytes to `<folder>/<rel_path>`, creating intermediate
+    ///     directories (e.g. `images/`) on demand.
+    ///  2. Reject any `rel_path` that escapes `folder` (same canonicalize
+    ///     check as `write_file`) — even when the parent dir doesn't
+    ///     exist yet, which is the common case for first paste.
+    ///  3. Return the absolute path actually written.
+    #[test]
+    fn save_clipboard_image_writes_and_creates_images_dir() {
+        let dir = std::env::temp_dir().join("mdreader_clip_image_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let folder = dir.to_string_lossy().to_string();
+        let rel = "images/pasted-1.png".to_string();
+        // A minimal 1×1 PNG. The Rust side doesn't decode it, just
+        // writes the bytes through, so the body content doesn't matter.
+        let bytes: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ];
+
+        let saved = save_clipboard_image(folder, rel.clone(), bytes.clone()).unwrap();
+        let saved_path = std::path::PathBuf::from(&saved);
+        assert!(saved_path.starts_with(&dir));
+        assert!(saved_path.ends_with("images/pasted-1.png"));
+        assert!(dir.join("images").is_dir());
+        let read_back = std::fs::read(&saved_path).unwrap();
+        assert_eq!(read_back, bytes);
+
+        // Empty bytes are rejected (defense in depth — JS side filters too).
+        let err = save_clipboard_image(dir.to_string_lossy().to_string(), "empty.png".into(), vec![]);
+        assert!(err.is_err(), "empty bytes should be rejected");
+    }
+
+    #[test]
+    fn save_clipboard_image_rejects_traversal() {
+        let dir = std::env::temp_dir().join("mdreader_clip_image_traversal_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let folder = dir.to_string_lossy().to_string();
+        // Sibling escape.
+        let err = save_clipboard_image(
+            folder.clone(),
+            "../escape.png".into(),
+            vec![0x89, 0x50, 0x4E, 0x47],
+        );
+        assert!(err.is_err(), "traversal should be rejected");
+        assert!(!dir.join("escape.png").exists());
+
+        // Nested traversal — `images/../../escape.png` resolves outside
+        // the folder after canonicalize.
+        let err = save_clipboard_image(
+            folder,
+            "images/../../escape2.png".into(),
+            vec![0x89, 0x50, 0x4E, 0x47],
+        );
+        assert!(err.is_err(), "nested traversal should be rejected");
     }
 }

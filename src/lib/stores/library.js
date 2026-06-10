@@ -7,6 +7,11 @@ import {
   folderName, folderRoot, folderMeta, groupMeta, ready, route, editing,
 } from './state.js';
 import { navOpen } from './prefs.js';
+// ROADMAP v1.1 #2 — cross-chapter search. Rebuild the MiniSearch index
+// whenever the open book changes (initial open + Tauri live-reload
+// watcher). The panel reads via `runSearch`; this module is the only
+// place that touches the indexer.
+import { buildSearchIndex } from '../cross-search.js';
 
 // ── Opening folders ──
 export async function openScanResult(scan) {
@@ -15,6 +20,9 @@ export async function openScanResult(scan) {
   folderName.set(idx.folderName);
   folderMeta.set(idx.folderMeta);
   groupMeta.set(idx.groupMeta);
+  // Rebuild the cross-chapter search index from the freshly-scanned
+  // contents. The panel becomes usable as soon as the user opens it.
+  buildSearchIndex(idx.folderMeta);
   await loadProgress();
   route.set({ name: 'home' });
   editing.set(false);
@@ -94,6 +102,8 @@ export async function setupWatcherListener() {
     folderName.set(idx.folderName);
     folderMeta.set(idx.folderMeta);
     groupMeta.set(idx.groupMeta);
+    // Re-index for cross-chapter search on every live-reload.
+    buildSearchIndex(idx.folderMeta);
     // If the open chapter vanished, fall back home.
     const r = get(route);
     if (r.name === 'chapter' && !idx.folderMeta.some((f) => f.path === r.path)) {

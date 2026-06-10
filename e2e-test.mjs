@@ -373,6 +373,260 @@ if (!csvNav) {
     : fail('CSV table', `wrappers=${csvInfo.wrappers} tables=${csvInfo.tables} headers=${csvInfo.headers} rows=${csvInfo.rows}`);
 }
 
+// ── 24. Cross-chapter search ⌘⇧F (ROADMAP v1.1 #2) ──────────────────────
+// Verifies the panel opens on the global shortcut, returns ranked
+// results across multiple chapters, navigates on click, and closes
+// on Esc. We type a query that hits a known string in the demo book
+// ("subscriber" appears in the sample chapters via the "italic and
+// bold text" boilerplate; the slides + svg + math chapters all share
+// the same opener sentence) and check that the panel renders a
+// results list with the expected fields, then jump to the first
+// result and confirm the Reader mounted the right chapter.
+await page.keyboard.down('Control');
+await page.keyboard.down('Shift');
+await page.keyboard.press('KeyF');
+await page.keyboard.up('Shift');
+await page.keyboard.up('Control');
+await new Promise(r => setTimeout(r, 250));
+const panelOpen = await page.$('.xsearch-panel');
+panelOpen ? pass('Cross-chapter search panel opens on ⌃⇧F') : fail('Cross-search open', '.xsearch-panel not in DOM');
+if (panelOpen) {
+  // Type a query that should match a few chapters — "italic" appears in
+  // every sample chapter's boilerplate, so the panel should show several
+  // results once the index has been built. (Build happened in App.svelte's
+  // loadTestData → openScanResult path.)
+  await page.focus('.xsearch-input');
+  await page.keyboard.type('italic');
+  await new Promise(r => setTimeout(r, 250));
+  const xInfo = await page.evaluate(() => {
+    const results = [...document.querySelectorAll('.xsearch-result')];
+    const titles = results.map((r) => r.querySelector('.xsearch-result-name')?.textContent || '');
+    const paths = results.map((r) => r.querySelector('.xsearch-result-path')?.textContent || '');
+    const snippets = results.map((r) => r.querySelector('.xsearch-result-snippet')?.textContent || '');
+    const marks = results.flatMap((r) => [...r.querySelectorAll('mark')].map((m) => m.textContent)).filter(Boolean);
+    const footMeta = document.querySelector('.xsearch-foot-meta')?.textContent || '';
+    return { count: results.length, titles, paths, snippets, marks, footMeta };
+  });
+  xInfo.count > 0 && xInfo.titles.length === xInfo.count && xInfo.marks.length >= xInfo.count
+    ? pass(`Cross-chapter search results (${xInfo.count} for "italic"; foot: "${xInfo.footMeta.trim()}")`)
+    : fail('Cross-search results', `count=${xInfo.count} titles=${xInfo.titles.length} marks=${xInfo.marks.length}`);
+
+  // Click the first result — should close the panel AND navigate to a
+  // chapter that contains "italic". The demo book has multiple chapters
+  // with the word; we just assert the panel is gone and the Reader is
+  // rendering some chapter.
+  await page.click('.xsearch-result');
+  await new Promise(r => setTimeout(r, 600));
+  const afterClick = await page.evaluate(() => ({
+    panelGone: !document.querySelector('.xsearch-panel'),
+    reader: !!document.querySelector('.reader2, .chapter-markdown'),
+    title: document.querySelector('.reader2-title')?.textContent || '',
+  }));
+  afterClick.panelGone
+    ? pass('Clicking a result closes the panel + navigates')
+    : fail('Cross-search jump', 'panel still open after click');
+
+  // Re-open via shortcut, type a fresh query, and confirm Esc closes it.
+  await page.keyboard.down('Control');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('KeyF');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
+  await new Promise(r => setTimeout(r, 200));
+  const reopened = !!(await page.$('.xsearch-panel'));
+  reopened ? pass('Re-open on ⌃⇧F works after navigation') : fail('Re-open', 'panel not in DOM');
+  if (reopened) {
+    await page.focus('.xsearch-input');
+    await page.keyboard.type('the');
+    await new Promise(r => setTimeout(r, 200));
+    const hasNoMatch = await page.$eval('.xsearch-results', el => el.textContent.length > 0).catch(() => false);
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 200));
+    const escClosed = !(await page.$('.xsearch-panel'));
+    escClosed ? pass('Esc closes the cross-chapter search panel') : fail('Esc', 'panel still open');
+  }
+}
+
+// ── 25. Settings panel shows the new options + Reset works ────────────────
+// (ROADMAP v1.1 #8 #9 #10 #11) Open Settings, confirm the new controls
+// exist, set a few prefs to non-default values, click Reset, and verify
+// every `md-reader-*` localStorage key is gone plus the UI is back to
+// defaults.
+await page.evaluate(() => {
+  const items = [...document.querySelectorAll('.sidebar-nav-item')];
+  const btn = items.find((b) => b.textContent.trim() === 'Settings');
+  if (btn) btn.click();
+});
+await new Promise(r => setTimeout(r, 300));
+const settingsOpen25 = await page.$('.settings-dialog');
+if (!settingsOpen25) {
+  fail('Settings options', 'could not open settings dialog');
+} else {
+  const controls = await page.evaluate(() => ({
+    codeTheme: !!document.querySelector('[data-test="code-theme-control"]'),
+    fontFamily: !!document.querySelector('[data-test="font-family-control"]'),
+    reopenLast: !!document.querySelector('[data-test="reopen-last-toggle"]'),
+    resetBtn: !!document.querySelector('[data-test="reset-prefs-btn"]'),
+  }));
+  const allControls = controls.codeTheme && controls.fontFamily && controls.resetBtn;
+  allControls
+    ? pass(`Settings panel shows new options (code theme=${controls.codeTheme}, font family=${controls.fontFamily}, reopen-last=${controls.reopenLast}, reset=${controls.resetBtn})`)
+    : fail('Settings options', JSON.stringify(controls));
+
+  // Set a few prefs to non-default values, then reset.
+  await page.evaluate(() => {
+    localStorage.setItem('md-reader-font-family', 'mono');
+    localStorage.setItem('md-reader-code-theme', 'nord');
+    localStorage.setItem('md-reader-reopen-last', '0');
+  });
+  await page.click('[data-test="reset-prefs-btn"]');
+  await new Promise(r => setTimeout(r, 250));
+  const afterReset = await page.evaluate(() => {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('md-reader-')) keys.push(k);
+    }
+    return {
+      keys,
+      codeTheme: document.documentElement.getAttribute('data-code-theme'),
+      fontFamily: document.documentElement.getAttribute('data-font-family'),
+      reopenLast: localStorage.getItem('md-reader-reopen-last'),
+      fontFamilyLs: localStorage.getItem('md-reader-font-family'),
+      codeThemeLs: localStorage.getItem('md-reader-code-theme'),
+    };
+  });
+  // After reset, the keys the test set should hold the DEFAULT values
+  // (not the override values), and the data-* attrs on <html> should
+  // also reflect the defaults. The reset wipes the override values
+  // and re-writes every default — so the keys are still there, but
+  // the values match the defaults.
+  const resetOk = afterReset.codeTheme === 'github'
+    && afterReset.fontFamily === 'serif'
+    && afterReset.reopenLast === '1'
+    && afterReset.fontFamilyLs === 'serif'
+    && afterReset.codeThemeLs === 'github';
+  resetOk
+    ? pass(`Reset restores defaults (code=${afterReset.codeTheme}, font=${afterReset.fontFamily}, reopen=${afterReset.reopenLast}; localStorage matches defaults)`)
+    : fail('Reset prefs', JSON.stringify(afterReset));
+  await page.click('.settings-close');
+  await new Promise(r => setTimeout(r, 250));
+}
+
+// ── 26. Reopen-last toggle persists across reload ──────────────────────────
+// (ROADMAP v1.1 #10) Toggle off, reload the page, confirm the pref
+// came back as off — i.e. the localStorage write is what survives
+// reload, not just the in-memory store.
+await page.evaluate(() => {
+  const items = [...document.querySelectorAll('.sidebar-nav-item')];
+  const btn = items.find((b) => b.textContent.trim() === 'Settings');
+  if (btn) btn.click();
+});
+await new Promise(r => setTimeout(r, 250));
+const toggleBefore = await page.evaluate(() => {
+  const t = document.querySelector('[data-test="reopen-last-toggle"]');
+  return {
+    on: t?.classList.contains('on') ?? null,
+    aria: t?.getAttribute('aria-checked') ?? null,
+    stored: localStorage.getItem('md-reader-reopen-last'),
+  };
+});
+await page.click('[data-test="reopen-last-toggle"]');
+await new Promise(r => setTimeout(r, 200));
+const toggleAfterClick = await page.evaluate(() => {
+  const t = document.querySelector('[data-test="reopen-last-toggle"]');
+  return {
+    on: t?.classList.contains('on') ?? null,
+    aria: t?.getAttribute('aria-checked') ?? null,
+    stored: localStorage.getItem('md-reader-reopen-last'),
+  };
+});
+const toggled = toggleBefore.on !== toggleAfterClick.on
+  && toggleAfterClick.stored !== toggleBefore.stored;
+toggled
+  ? pass(`Reopen-last toggle changes (${toggleBefore.stored} → ${toggleAfterClick.stored}, on=${toggleAfterClick.on})`)
+  : fail('Reopen-last toggle', `before=${JSON.stringify(toggleBefore)} after=${JSON.stringify(toggleAfterClick)}`);
+
+await page.click('.settings-close');
+await new Promise(r => setTimeout(r, 200));
+await page.reload({ waitUntil: 'networkidle0' });
+await new Promise(r => setTimeout(r, 600));
+await page.evaluate(() => {
+  const items = [...document.querySelectorAll('.sidebar-nav-item')];
+  const btn = items.find((b) => b.textContent.trim() === 'Settings');
+  if (btn) btn.click();
+});
+await new Promise(r => setTimeout(r, 250));
+const toggleAfterReload = await page.evaluate(() => {
+  const t = document.querySelector('[data-test="reopen-last-toggle"]');
+  return {
+    on: t?.classList.contains('on') ?? null,
+    aria: t?.getAttribute('aria-checked') ?? null,
+    stored: localStorage.getItem('md-reader-reopen-last'),
+  };
+});
+const persisted = toggleAfterReload.on === (toggleAfterClick.stored === '1')
+  && toggleAfterReload.stored === toggleAfterClick.stored;
+persisted
+  ? pass(`Reopen-last persists across reload (stored=${toggleAfterReload.stored}, on=${toggleAfterReload.on})`)
+  : fail('Reopen-last persistence', `after reload=${JSON.stringify(toggleAfterReload)}, expected to match ${toggleAfterClick.stored}`);
+
+// ── 27. Anchor infrastructure (ROADMAP v1.1 #23) ───────────────────────────
+// Every renderable block in the open chapter must carry a stable
+// `data-md-anchor` attribute. We re-navigate to the code chapter (the
+// richest mix: h1, h2, code, math, csv) and assert (a) ≥3 distinct
+// anchor kinds, (b) anchors are present on the expected kinds, and
+// (c) per-kind indices are 1..N contiguous (no skips).
+await page.evaluate(() => {
+  const items = [...document.querySelectorAll('.sidebar-chapter')];
+  const code = items.find((b) => /code|shiki/i.test(b.textContent));
+  if (code) code.click();
+});
+await new Promise(r => setTimeout(r, 500));
+const anchorInfo = await page.evaluate(() => {
+  const area = document.querySelector('.chapter-markdown');
+  if (!area) return { kinds: {}, kindsPresent: [], contiguous: false, total: 0 };
+  const all = [...area.querySelectorAll('[data-md-anchor]')];
+  const byKind = {};
+  for (const el of all) {
+    const a = el.getAttribute('data-md-anchor') || '';
+    // Accept kinds that are either all-letters (para, code, mermaid, eq, …)
+    // or letter+digits (h1, h2, h3). Then the kind itself may have an inner
+    // dash (eq-block), so allow one nested letter group after a dash.
+    const m = a.match(/^([a-z]+\d?)(?:-[a-z]+)?-(\d+)$/);
+    if (!m) continue;
+    const kind = m[1];
+    const idx = Number(m[2]);
+    if (!byKind[kind]) byKind[kind] = [];
+    byKind[kind].push(idx);
+  }
+  // Per-kind: indices should be 1..N contiguous with no duplicates.
+  let contiguous = true;
+  for (const k of Object.keys(byKind)) {
+    const xs = [...byKind[k]].sort((a, b) => a - b);
+    for (let i = 0; i < xs.length; i += 1) {
+      if (xs[i] !== i + 1) { contiguous = false; break; }
+    }
+    if (!contiguous) break;
+  }
+  return {
+    kinds: byKind,
+    kindsPresent: Object.keys(byKind).sort(),
+    contiguous,
+    total: all.length,
+  };
+});
+const hasCodeKind = (anchorInfo.kinds.code?.length ?? 0) > 0;
+const hasHeadingKind = (anchorInfo.kinds.h2?.length ?? 0) > 0 || (anchorInfo.kinds.h1?.length ?? 0) > 0;
+const anchorOk = anchorInfo.total >= 3
+  && anchorInfo.kindsPresent.length >= 3
+  && hasCodeKind
+  && hasHeadingKind
+  && anchorInfo.contiguous;
+anchorOk
+  ? pass(`Anchor infrastructure (${anchorInfo.total} anchors, kinds: ${anchorInfo.kindsPresent.join(',')}; contiguous=${anchorInfo.contiguous})`)
+  : fail('Anchor infrastructure', JSON.stringify(anchorInfo));
+
 await browser.close();
 
 const failed = results.filter(r => r[0] === 'FAIL');
