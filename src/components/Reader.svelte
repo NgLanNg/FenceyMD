@@ -8,7 +8,6 @@
     saveProgress, progressFor, toggleBookmark, adjustFontSize, adjustContentWidth, toggleTheme,
     fontSizeLabels, renameFile,
     navCollapsed, navOpen, viewMode, toggleViewMode,
-    onboarded, dismissOnboarding,
   } from '../lib/stores.js';
   import { pendingInChapterSearch } from '../lib/stores/state.js';
   import { chapterScrollFrac, lastSavedAt } from '../lib/stores/progress.js';
@@ -16,8 +15,6 @@
   import { resolveChapterLink } from '../lib/link-resolver.js';
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
-  import { outlineVisible, isOutlineVisible } from '../lib/stores/prefs.js';
-
   let { path, isMobile = false } = $props();
 
   // Editing requires the Tauri backend to save. In dev/browser ?test=1 mode we
@@ -128,11 +125,6 @@
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   });
-  const outlineOpen = $derived(isOutlineVisible($outlineVisible, viewportW));
-  // Wrapper class for the reader — adds an `outline-on` hook so CSS can
-  // shift toolbar right-padding when the pane is showing, keeping the
-  // article centred in the remaining space.
-  const readerCls = $derived('reader2' + (outlineOpen ? ' outline-on' : ''));
 
   // Re-enhance + restore scroll whenever the chapter (or its html) changes.
   // Close the editor whenever the chapter's rendered HTML changes from an
@@ -445,7 +437,7 @@
 {#if editing}
   <Editor {item} oncancel={() => (editing = false)} onsaved={() => (editing = false)} />
 {:else}
-<div class={readerCls}>
+<div class="reader2">
   <!-- Reading progress, fixed to viewport top -->
   <div class="reader2-progress" aria-hidden="true"><div class="reader2-progress-fill" style="width:{progressBar}%"></div></div>
 
@@ -576,20 +568,6 @@
             {renameBusy ? 'Renaming…' : 'Rename'}
           </button>
         </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- ROADMAP v1.1 #16 — first-launch onboarding hint. Sits as a
-       small pill just inside the reader, pointing at the sidebar
-       with a chevron. Dismiss persists in localStorage; once gone,
-       it never comes back. -->
-  {#if !$onboarded}
-    <div class="onboard-hint" role="status" aria-live="polite">
-      <div class="onboard-hint-arrow" aria-hidden="true"></div>
-      <div class="onboard-hint-body">
-        <span class="onboard-hint-text">Pick a folder to start — Markdown, HTML, even Excalidraw scenes render in place.</span>
-        <button class="onboard-hint-dismiss" onclick={dismissOnboarding} aria-label="Dismiss onboarding hint">Got it</button>
       </div>
     </div>
   {/if}
