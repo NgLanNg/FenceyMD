@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import { Editor } from '@tiptap/core';
+  import { Editor, Extension } from '@tiptap/core';
   import StarterKit from '@tiptap/starter-kit';
   import Placeholder from '@tiptap/extension-placeholder';
   import { Markdown } from 'tiptap-markdown';
@@ -57,6 +57,34 @@
 
   let editor;
   let _nowInterval = null;
+
+  // Plain Enter inside a code block should exit to a new paragraph.
+  // Tiptap's default (StarterKit) keeps you inside the block — you
+  // need Mod-Enter to leave. We register a small Tiptap extension
+  // with addKeyboardShortcuts(); Tiptap wires this up as a
+  // ProseMirror keymap with higher priority than StarterKit's
+  // default so plain Enter behaves as users expect. The function
+  // lives outside the template literal so Svelte's $-prefix parser
+  // rule doesn't trip on `$from`.
+  function onCodeBlockEnter(props) {
+    const editorInstance = props && props.editor;
+    if (!editorInstance) return false;
+    const state = editorInstance.state;
+    const fromPos = state.selection.$from;
+    if (fromPos && fromPos.parent && fromPos.parent.type && fromPos.parent.type.name === 'codeBlock') {
+      return editorInstance.chain().focus().exitCode().run();
+    }
+    return false;
+  }
+
+  const CodeBlockEnterExtension = Extension.create({
+    name: 'codeBlockEnterExit',
+    addKeyboardShortcuts() {
+      return {
+        Enter: onCodeBlockEnter,
+      };
+    },
+  });
 
   // ── #22 paragraph tracking ────────────────────────────────────────
   // We emit a `paragraph-focus` CustomEvent on `editorEl` carrying
@@ -364,9 +392,20 @@
       editor = new Editor({
         element: editorEl,
         extensions: [
-          StarterKit,
+          StarterKit.configure({
+            // Default language for new code blocks (otherwise Tiptap
+            // shows them as a bare fence with no language).
+            codeBlock: { defaultLanguage: 'plaintext' },
+          }),
           Placeholder.configure({ placeholder: 'Start writing…' }),
           Markdown.configure({ html: false, tightLists: true }),
+          // Plain Enter inside a code block should exit to a new
+          // paragraph below it. Tiptap's default is to add a soft
+          // newline within the block (you need Mod-Enter to exit),
+          // which surprises prose authors. We add a tiny custom
+          // extension that registers a higher-priority keymap
+          // plugin via addProseMirrorPlugins.
+          CodeBlockEnterExtension,
         ],
         content: item?.content ?? '',
         editorProps: { attributes: { class: 'notion-prose' } },

@@ -764,7 +764,8 @@
       font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-sm);
     }
     @media (max-width: 768px) {
-      .sidebar { position: fixed; z-index: 40; box-shadow: 0 0 40px rgba(0,0,0,0.25); }
+      .sidebar { position: fixed; z-index: 100; box-shadow: 0 0 40px rgba(0,0,0,0.25); }
+      .nav-backdrop { z-index: 95; }
     }
 /* ───────────────────────────────────────────────────────────────────────────
    Svelte rebuild additions: responsive drawer, backdrop, and a few fixes.
