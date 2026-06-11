@@ -127,6 +127,10 @@ export function toggleViewMode() {
  *  the reader-qol task — we keep the helper here so the store has
  *  a writer in the same module.) */
 export function dismissOnboarding() {
+  // Write localStorage directly — the subscribe side-effect runs at module
+  // init time and can race against Tauri webview localStorage availability.
+  // Bypassing the store here ensures the value actually persists.
+  try { localStorage.setItem('md-reader-onboarded', '1'); } catch {}
   onboarded.set(true);
 }
 
