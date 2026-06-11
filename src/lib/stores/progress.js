@@ -15,6 +15,15 @@ export function progressFor(diskPath) {
 // progressMap) so the data path is obvious.
 export const chapterScrollFrac = writable(0);
 
+// ROADMAP v1.1 #14 — timestamp (ms since epoch) of the last editor
+// save, or 0 if the editor has never saved. The Editor.svelte
+// toolbar subscribes to this for the "Saved 2s ago" indicator and
+// the Reader reads it for the unsaved-changes dot in the chapter
+// list. Stored in a writable (not derived) so any save path —
+// autosave, manual ⌘S, or programmatic — can update it from the
+// outside, not just from the Editor component itself.
+export const lastSavedAt = writable(0);
+
 export async function loadProgress() {
   const root = get(folderRoot);
   if (TAURI) {
