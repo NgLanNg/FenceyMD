@@ -13,6 +13,7 @@
   import { pendingInChapterSearch } from '../lib/stores/state.js';
   import { chapterScrollFrac } from '../lib/stores/progress.js';
   import { hasMultipleSlides } from '../lib/slides.js';
+  import { resolveChapterLink } from '../lib/link-resolver.js';
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
   import OutlinePane from './OutlinePane.svelte';
@@ -232,6 +233,30 @@
       pendingInChapterSearch.set('');
     }
   });
+
+  // ROADMAP v1.1 #20 — markdown link-to-md navigation. When the user
+  // clicks an <a href="…"> inside the rendered chapter, intercept it
+  // and route to the target chapter instead of letting the WebView
+  // navigate away (which reloads the app in dev, and is broken in
+  // Tauri). The resolver short-circuits external / anchor / non-md
+  // links, returning null, and we let the browser handle those.
+  function onChapterClick(e) {
+    // Find the closest <a> in case the user clicked a child element
+    // (e.g. <code> or <em> inside a markdown link).
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const href = a.getAttribute('href');
+    if (!href) return;
+    // Use `diskPath` (the full path including the group prefix) so the
+    // resolver's directory math has the right base. `path` is group-
+    // stripped and would break `../` resolution.
+    const currentPath = item?.diskPath || path;
+    const resolved = resolveChapterLink(currentPath, href, $folderMeta);
+    if (!resolved) return; // browser handles external / anchor / non-md
+    e.preventDefault();
+    e.stopPropagation();
+    goChapter(resolved);
+  }
 
   function copyLink() {
     const url = location.origin + location.pathname + '?load=' + encodeURIComponent(path);
@@ -514,7 +539,7 @@
     </header>
 
     {#key $theme}
-      <div class="chapter-markdown reader2-body" bind:this={mdEl} data-title={mdTitle}>{@html bodyHtml}</div>
+      <div class="chapter-markdown reader2-body" bind:this={mdEl} data-title={mdTitle} onclick={onChapterClick}>{@html bodyHtml}</div>
     {/key}
 
     {#if sib.prev || sib.next}

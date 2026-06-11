@@ -163,9 +163,38 @@
     if (!visible) return;
     if (e.key === 'Escape') onclose();
   }
+
+  // ROADMAP v1.1 #22 — paragraph tracking in edit mode. Track 1 (Editor)
+  // dispatches a `paragraph-focus` CustomEvent on its `editorEl` (the
+  // Tiptap wrapper div) with `detail.anchor` set to the `data-md-anchor`
+  // string of the enclosing block (e.g. `"para-3"`, `"h2-1"`). We
+  // listen on `document` so we don't need a direct ref to editorEl —
+  // the event bubbles up. When the editor unmounts (user closes it,
+  // navigates away, or saves), we reset the highlight so a stale
+  // paragraph doesn't stay "active" in the pane.
   onMount(() => {
+    const onFocus = (e) => {
+      const anchor = e?.detail?.anchor ?? null;
+      activeAnchor = anchor;
+    };
+    document.addEventListener('paragraph-focus', onFocus);
+
+    // Reset when the editor is gone. .notion-editor-inner is the
+    // Tiptap wrapper; its removal coincides with the Editor
+    // component's `{#if editing}` teardown.
+    const mo = new MutationObserver(() => {
+      if (!document.querySelector('.notion-editor-inner')) {
+        activeAnchor = null;
+      }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+
     window.addEventListener('keydown', onWindowKey);
-    return () => window.removeEventListener('keydown', onWindowKey);
+    return () => {
+      document.removeEventListener('paragraph-focus', onFocus);
+      mo.disconnect();
+      window.removeEventListener('keydown', onWindowKey);
+    };
   });
 </script>
 
