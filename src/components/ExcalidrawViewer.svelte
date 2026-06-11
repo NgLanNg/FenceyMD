@@ -306,6 +306,7 @@
   {#if label}
     <div class="excalidraw-label">Excalidraw {label}</div>
   {/if}
+  <div class="excalidraw-print-note">Excalidraw diagram{label ? ` — ${label}` : ''} (open in app to view)</div>
   <div class="excalidraw-host" bind:this={host} use:lazyMount>
     {#if loading}
       <div class="excalidraw-placeholder">Preparing Excalidraw…</div>
@@ -349,6 +350,7 @@
 <style>
   .excalidraw-wrap { position: relative; margin: var(--space-4, 1rem) 0; }
   .excalidraw-wrap:hover .excalidraw-edit-btn { opacity: 1; }
+  .excalidraw-print-note { display: none; }
 
   .excalidraw-host {
     width: 100%;

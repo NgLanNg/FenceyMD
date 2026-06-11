@@ -9,6 +9,7 @@
     fontSizeLabels, renameFile,
     navCollapsed, navOpen, viewMode, toggleViewMode,
   } from '../lib/stores.js';
+  import OutlinePane from './OutlinePane.svelte';
   import { pendingInChapterSearch } from '../lib/stores/state.js';
   import { chapterScrollFrac, lastSavedAt } from '../lib/stores/progress.js';
   import { hasMultipleSlides } from '../lib/slides.js';
@@ -25,6 +26,7 @@
   let searchQuery = $state('');
   let editing = $state(false);
   let pdfBusy = $state(false);
+  let outlineVisible = $state(false);
 
   // ── Rename ──
   let renaming = $state(false);
@@ -323,7 +325,10 @@
               version: 2,
               source: 'https://excalidraw.com',
               elements: parsed.elements || [],
-              appState: { ...(parsed.appState || {}), viewBackgroundColor: $theme === 'dark' ? '#1c1c1e' : '#ffffff' },
+              // PDF is always rendered light, so force a white scene background
+              // regardless of the app theme — a dark scene would print as a
+              // dark box floating on the white page.
+              appState: { ...(parsed.appState || {}), viewBackgroundColor: '#ffffff' },
               files: parsed.files || {},
             });
             // The exported SVG is an SVGSVGElement. Style the wrapper so it
@@ -459,12 +464,26 @@
         </div>
       </div>
       <div class="reader2-tools-right">
-        <div class="reader2-tool-group">
+        <div
+          class="outline-hover-zone"
+          role="navigation"
+          aria-label="Chapter outline"
+          onmouseenter={() => outlineVisible = true}
+          onmouseleave={() => outlineVisible = false}
+        >
+          <button class="outline-trigger tool-btn" title="On this page" aria-label="Show chapter outline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+          </button>
+          {#if outlineVisible}
+            <OutlinePane mdEl={mdEl} bind:visible={outlineVisible} />
+          {/if}
+        </div>
+        <div class="reader2-tool-group hide-on-phone">
           <button class="tool-btn" onclick={() => adjustFontSize(-1)} title="Decrease font size">A−</button>
           <span class="font-size-indicator">{fontSizeLabels[$fontSize] ?? 'M'}</span>
           <button class="tool-btn" onclick={() => adjustFontSize(1)} title="Increase font size">A+</button>
         </div>
-        <div class="reader2-tool-group">
+        <div class="reader2-tool-group hide-on-phone">
           <button class="tool-btn" onclick={() => adjustContentWidth(-50)} title="Narrower">W−</button>
           <button class="tool-btn" onclick={() => adjustContentWidth(50)} title="Wider">W+</button>
         </div>

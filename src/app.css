@@ -1411,6 +1411,73 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
 }
 .reader2-tool-group:last-child { border-right: none; padding-right: 0; }
 
+.outline-hover-zone {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.outline-trigger {
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+.outline-hover-zone:hover .outline-trigger { opacity: 1; }
+
+.outline-pane {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  width: 260px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--paper, #fff);
+  border: 1px solid var(--surface-variant);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  padding: var(--space-3) 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+.outline-pane-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--surface-variant);
+  margin-bottom: var(--space-2);
+}
+.outline-pane-title {
+  font-weight: 600; color: var(--ink-muted);
+  text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em;
+}
+.outline-pane-close {
+  background: none; border: none; cursor: pointer; color: var(--ink-muted);
+  padding: 2px; border-radius: 4px;
+}
+.outline-pane-close:hover { color: var(--ink); background: var(--surface-variant); }
+.outline-pane-close svg { width: 14px; height: 14px; display: block; }
+.outline-pane-empty {
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.outline-pane-list { list-style: none; margin: 0; padding: 0; }
+.outline-pane-item { margin: 0; }
+.outline-pane-item a {
+  display: block;
+  padding: 6px var(--space-4);
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-radius: 4px;
+  margin: 0 var(--space-1);
+}
+.outline-pane-item a:hover { background: var(--surface-variant); }
+.outline-pane-item.level-2 a { padding-left: calc(var(--space-4) + 12px); font-size: 13px; }
+.outline-pane-item.level-3 a { padding-left: calc(var(--space-4) + 24px); font-size: 13px; color: var(--ink-muted); }
+.outline-pane-item.active a {
+  background: var(--surface-variant);
+  color: var(--tertiary);
+  font-weight: 600;
+}
+
 .reader2-article {
   max-width: var(--content-w, 680px);
   margin: 0 auto;
@@ -1559,9 +1626,26 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
 @media (max-width: 768px) {
   .lib-page { padding: var(--space-12) var(--space-5) var(--space-12); }
   .lib-display-title, .picker-title { font-size: 32px; line-height: 40px; }
-  .reader2-toolbar-inner { padding: 0 var(--space-4); }
-  .reader2-find input { width: 120px; }
-  .reader2-tool-group { gap: 0; }
+  .reader2-toolbar-inner { padding: 0 var(--space-4); gap: var(--space-2); }
+  .reader2-find input { width: 110px; }
+  .reader2-tool-group { gap: 0; padding-right: var(--space-2); }
+  .reader2-tools-right { gap: var(--space-2); }
+  /* Hide the back-button text label, keep just the chevron */
+  .reader2-back { font-size: 0; gap: 0; }
+  .reader2-back svg { width: 18px; height: 18px; }
+}
+@media (max-width: 600px) {
+  .reader2-find input { width: 80px; font-size: 11px; }
+  /* Below 600, the font/width controls are still useful — keep them but tighter */
+  .reader2-tool-group { padding-right: var(--space-1); }
+}
+@media (max-width: 480px) {
+  /* Very narrow: hide the secondary controls (font/width); the rest of the
+     toolbar (back, find, theme, slides, links, bookmark, edit, outline) is
+     what matters on a phone. Font/width live in Settings as a fallback. */
+  .reader2-toolbar-inner { gap: var(--space-1); padding: 0 var(--space-2); }
+  .reader2-find input { width: 60px; padding-left: 24px; }
+  .reader2-tool-group.hide-on-phone { display: none; }
 }
 
 /* ── Sidebar nested folder tree ─────────────────────────────────────── */
@@ -1602,33 +1686,97 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
 
 /* ── Print → "Save as PDF" (crisp vector text, small file) ──────────── */
 @media print {
-  /* Hide all chrome; show only the reading article. */
+  /* ① Hide all chrome. */
   .sidebar, .reader2-toolbar, .reader2-progress, .reader2-fab,
   .reader2-siblings, .nav-reopen, .nav-backdrop, .diagram-tools,
-  .copy-btn, .rename-overlay { display: none !important; }
+  .copy-btn, .rename-overlay, .outline-hover-zone,
+  .xsearch-panel, .xsearch-backdrop,
+  .excalidraw-edit-btn, .excalidraw-modal,
+  .excalidraw-modal-backdrop { display: none !important; }
 
-  html, body { background: #fff !important; height: auto !important; }
+  /* ② Full-page background — no colored box, no centering constraint. */
+  html, body {
+    background: #fff !important; color: #000 !important;
+    width: 100% !important; height: auto !important;
+    margin: 0 !important; padding: 0 !important;
+  }
   .app-shell, .main-content, .content-area-wrapper, .content-area {
     display: block !important; overflow: visible !important;
-    height: auto !important; width: auto !important; margin: 0 !important;
+    height: auto !important; width: 100% !important; max-width: 100% !important;
+    margin: 0 !important; padding: 0 !important;
+    background: transparent !important;
   }
-  .reader2 { display: block !important; }
+  .reader2 {
+    display: block !important; background: transparent !important;
+    width: 100% !important; overflow: visible !important;
+  }
   .reader2-article {
-    max-width: 100% !important; margin: 0 !important; padding: 0 !important;
+    max-width: 100% !important; width: 100% !important;
+    margin: 0 !important; padding: 0 !important;
+    background: transparent !important;
   }
+
+  /* ③ Text. */
   .reader2-header { text-align: left !important; margin-bottom: 1.5rem !important; }
   .reader2-title { color: #000 !important; }
   .reader2-meta { color: #444 !important; }
   .chapter-markdown, .chapter-markdown * { color: #000 !important; }
   .chapter-markdown a { color: #000 !important; text-decoration: underline; }
   .chapter-markdown pre, .chapter-markdown code {
-    background: #f4f4f4 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    background: #f4f4f4 !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  /* Keep blocks from splitting across pages. */
-  pre, .mermaid, .svg-block, figure, table, blockquote, h1, h2, h3 {
+
+  /* ④ Page breaks — keep blocks together. */
+  pre, .mermaid, .svg-block, figure, table, blockquote, h1, h2, h3,
+  .diagram-wrap, .csv-block, .excalidraw-wrap {
     break-inside: avoid; page-break-inside: avoid;
   }
   h1, h2, h3 { break-after: avoid; }
+
+  /* ⑤ Diagrams — scale to fit, never clip. */
+  .diagram-wrap {
+    max-width: 100% !important; width: 100% !important;
+    overflow: visible !important; position: static !important;
+  }
+  .mermaid, .svg-block {
+    max-width: 100% !important; overflow: visible !important;
+    text-align: center;
+  }
+  .mermaid svg, .svg-block svg {
+    max-width: 100% !important; height: auto !important;
+    display: block; margin: 0 auto;
+  }
+
+  /* ⑥ CSV tables — remove the scroll container; shrink font to fit. */
+  .csv-block {
+    overflow-x: visible !important; width: 100% !important;
+  }
+  .csv-block table {
+    font-size: 0.72em !important; width: 100% !important;
+    table-layout: auto !important;
+  }
+  .csv-block td, .csv-block th {
+    white-space: normal !important; word-break: break-word !important;
+    overflow: visible !important;
+  }
+
+  /* ⑦ Excalidraw — hide the canvas island, show a print placeholder. */
+  .excalidraw-host { display: none !important; }
+  .excalidraw-print-note {
+    display: block !important;
+    border: 1px solid #ccc; border-radius: 4px;
+    padding: 1rem 1.25rem; margin: 0.5rem 0;
+    color: #555; font-style: italic; font-size: 0.9em;
+    text-align: center;
+  }
+
+  /* ⑧ Slide view — scale to page. */
+  .reader2-slides { max-width: 100% !important; overflow: visible !important; }
+  .reader2-slides iframe, .reader2-slides svg {
+    max-width: 100% !important; height: auto !important;
+  }
+
   @page { margin: 0.7in; }
 }
 
