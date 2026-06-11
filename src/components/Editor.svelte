@@ -8,7 +8,7 @@
   import { Markdown } from 'tiptap-markdown';
   import { saveFile } from '../lib/stores.js';
   import { lastSavedAt } from '../lib/stores/progress.js';
-  import { folderRoot, isSavingFromEditor } from '../lib/stores/state.js';
+  import { folderRoot } from '../lib/stores/state.js';
   import { saveClipboardImage } from '../lib/tauri.js';
   import { renderMarkdown, enhance } from '../lib/markdown.js';
   // Anchor tracking is doc-state based (see `computeAnchor()` below)
@@ -110,11 +110,7 @@
     if (_autosaveTimer) clearTimeout(_autosaveTimer);
     _autosaveTimer = setTimeout(() => {
       // Don't double-save: skip if a save is already in flight.
-      // Set the flag BEFORE save() so the Reader $effect (which fires
-      // synchronously when folderMeta → html changes) sees it and doesn't
-      // close the editor while autosave is in flight.
       if (!saving && dirty) {
-        isSavingFromEditor.set(true);
         save({ silent: true });
       }
     }, AUTOSAVE_MS);
@@ -433,17 +429,20 @@
     if (!editor) return;
     if (saving) return; // belt + suspenders
     saving = true; error = '';
+    // Stamp `lastSavedAt` BEFORE saveFile so the Reader's $effect sees
+    // the recent save when folderMeta → html changes (otherwise the
+    // effect runs with lastSave=0 first, sets editing=false, and only
+    // THEN sees the updated lastSave — too late to undo the close).
+    lastSaved = Date.now();
+    lastSavedAt.set(lastSaved);
     try {
       const md = editor.storage.markdown.getMarkdown();
       await saveFile(item, md);
       dirty = false;
-      lastSaved = Date.now();
-      lastSavedAt.set(lastSaved); // global: Reader sidebar unsaved-dot
       if (!silent) onsaved?.();
     } catch (e) {
       error = String(e);
     } finally {
-      isSavingFromEditor.set(false);
       saving = false;
       // If the user kept typing during the in-flight save, the
       // timer is already armed — let it fire normally.

@@ -11,7 +11,7 @@
     onboarded, dismissOnboarding,
   } from '../lib/stores.js';
   import { pendingInChapterSearch } from '../lib/stores/state.js';
-  import { chapterScrollFrac } from '../lib/stores/progress.js';
+  import { chapterScrollFrac, lastSavedAt } from '../lib/stores/progress.js';
   import { hasMultipleSlides } from '../lib/slides.js';
   import { resolveChapterLink } from '../lib/link-resolver.js';
   import Editor from './Editor.svelte';
@@ -140,11 +140,21 @@
   function closeOutline() { outlineVisible.set('0'); }
 
   // Re-enhance + restore scroll whenever the chapter (or its html) changes.
-  // Close the editor whenever the chapter's rendered HTML changes (external update or save).
+  // Close the editor whenever the chapter's rendered HTML changes from an
+  // EXTERNAL source (file watcher, etc.). Autosave's own save() also updates
+  // folderMeta → html, but the editor should stay open in that case. We
+  // detect "save vs external" by checking $lastSavedAt: if a save happened
+  // in the last few hundred ms, this html change is from our own save
+  // (and the editor's `save({ silent: true })` path already handled the
+  // close-or-not decision). Otherwise, it's an external change and we close
+  // the editor so the user sees the fresh content.
+  //
   // IMPORTANT: must NOT read `editing` here — that would make Svelte track it, causing
   // the effect to re-run when editing=true and immediately reset it to false.
   $effect(() => {
     html; // track only html — do not read mdEl or editing here
+    const lastSave = $lastSavedAt;
+    if (lastSave && (Date.now() - lastSave) < 500) return; // our own autosave; editor stays open
     editing = false;
   });
 
