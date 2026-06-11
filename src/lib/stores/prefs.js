@@ -18,7 +18,8 @@ export const PREFS_DEFAULTS = Object.freeze({
   fontFamily: 'serif',   // 'serif' | 'sans' | 'mono'
   reopenLast: true,
   // Outline pane (ROADMAP v1.1 #3, owned by the outline-pane task).
-  outlineVisible: 'auto',
+  // Disabled by default — shows as inline without proper sidebar CSS.
+  outlineVisible: '0',
 });
 
 export const theme = writable(lsGet('md-reader-theme', PREFS_DEFAULTS.theme));

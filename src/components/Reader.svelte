@@ -16,8 +16,7 @@
   import { resolveChapterLink } from '../lib/link-resolver.js';
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
-  import OutlinePane from './OutlinePane.svelte';
-  import { outlineVisible, isOutlineVisible, toggleOutline } from '../lib/stores/prefs.js';
+  import { outlineVisible, isOutlineVisible } from '../lib/stores/prefs.js';
 
   let { path, isMobile = false } = $props();
 
@@ -134,10 +133,6 @@
   // shift toolbar right-padding when the pane is showing, keeping the
   // article centred in the remaining space.
   const readerCls = $derived('reader2' + (outlineOpen ? ' outline-on' : ''));
-  // Pane's onclose (Esc / click outside the X) — pin the store to '0'
-  // so the pane stays closed even when the viewport is wide. The user
-  // can re-open with the toolbar button or ⌘\, which then flips to '1'.
-  function closeOutline() { outlineVisible.set('0'); }
 
   // Re-enhance + restore scroll whenever the chapter (or its html) changes.
   // Close the editor whenever the chapter's rendered HTML changes from an
@@ -427,13 +422,6 @@
     }
     if (e.key === 'ArrowLeft' && sib.prev) goChapter(sib.prev.path);
     else if (e.key === 'ArrowRight' && sib.next) goChapter(sib.next.path);
-    else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
-      // ROADMAP v1.1 #3 — ⌘\ toggles the auto-TOC outline pane.
-      // preventDefault so the browser doesn't steal the keystroke
-      // (e.g. Chrome's "quit" hint on ⌘\).
-      e.preventDefault();
-      toggleOutline();
-    }
     else if (e.key === 'g' || e.key === 'G') {
       const now = performance.now();
       if (e.key === 'G') {
@@ -491,16 +479,6 @@
         <div class="reader2-tool-group">
           <button class="tool-btn" onclick={toggleTheme} title="Toggle dark mode" aria-label="Toggle dark mode">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          </button>
-          <button
-            class="tool-btn"
-            class:active={outlineOpen}
-            onclick={toggleOutline}
-            title="Toggle outline (⌘\\)"
-            aria-label="Toggle outline"
-            aria-pressed={outlineOpen}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
           </button>
           <button
             class="tool-btn"
@@ -646,13 +624,5 @@
     </div>
   {/if}
 
-  <!-- ROADMAP v1.1 #3 — auto-TOC outline pane. The pane is always
-       mounted (so the IntersectionObserver is wired as soon as the
-       Reader mounts) but its `visible` flag mirrors the
-       auto-resolved `outlineOpen` state. Esc/click-outside close
-       pins the store to '0' so the user can opt out of the
-       auto-resolved default. ⌘\ / toolbar toggle is owned by
-       `toggleOutline()` above. -->
-  <OutlinePane mdEl={mdEl} visible={outlineOpen} onclose={closeOutline} />
 </div>
 {/if}
