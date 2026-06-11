@@ -963,11 +963,32 @@ fn build_print_html(
 :root {{
 {root_vars}}}
 
+/* ── Force a print-friendly LIGHT palette ───────────────────────────────
+   The vars above are snapshotted from the app's CURRENT theme. If the user
+   exports while in dark mode they carry dark colors, which print as a dark
+   rectangle floating in white page margins ("just a box") and waste ink. A
+   printed/exported document should always be light and high-contrast, so we
+   override every COLOR var here — this :root block wins by source order.
+   Fonts, spacing, and radii from the snapshot above are kept. */
+:root {{
+  --surface: #ffffff;
+  --surface-variant: #e2e5e4;
+  --surface-container-low: #f5f6f5;
+  --surface-container-lowest: #f7f8f7;
+  --surface-container: #eeeeed;
+  --surface-container-high: #e7e7e6;
+  --ink: #1f2222;
+  --ink-secondary: #4a4d4d;
+  --ink-muted: #6c6e6e;
+  --tertiary: #a33e34;
+  --tertiary-dim: rgba(163, 62, 52, 0.08);
+}}
+
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
 html, body {{
   width: 100%;
-  background: var(--surface);
+  background: #ffffff;
 }}
 
 body {{
@@ -1105,8 +1126,9 @@ body {{
 .chapter-markdown table {{
   border-collapse: collapse;
   width: 100%;
+  table-layout: auto;
   margin: var(--space-4, 1rem) 0;
-  font-size: 0.95em;
+  font-size: 0.9em;
 }}
 .chapter-markdown th {{
   background: var(--surface-container-low);
@@ -1115,11 +1137,13 @@ body {{
   padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
   border: 1px solid var(--surface-variant);
   color: var(--ink);
+  word-break: break-word;
 }}
 .chapter-markdown td {{
   padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
   border: 1px solid var(--surface-variant);
   color: var(--ink);
+  word-break: break-word;
 }}
 .chapter-markdown tr:nth-child(even) td {{ background: var(--surface-container-lowest); }}
 
@@ -1147,6 +1171,10 @@ body {{
 }}
 .chapter-markdown .mermaid svg {{
   max-width: 100%;
+  /* Cap height to just under the A4 printable height so a tall, detailed
+     diagram scales down to fit on one page instead of being clipped by the
+     page-break-inside: avoid above. preserveAspectRatio keeps it undistorted. */
+  max-height: 9.5in;
   height: auto;
   display: block;
   margin: 0 auto;
@@ -1178,7 +1206,7 @@ body {{
   padding: var(--space-4, 1rem);
   text-align: center;
 }}
-.chapter-markdown .svg-block svg {{ max-width: 100%; height: auto; }}
+.chapter-markdown .svg-block svg {{ max-width: 100%; max-height: 9.5in; height: auto; }}
 
 /* Excalidraw scenes: the JS-side enhance() mounts an interactive
    viewer; the Rust PDF transform replaces it with `.excalidraw-fallback`
@@ -1210,7 +1238,10 @@ body {{
 .chapter-markdown .csv-block table {{
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  /* `auto` lets columns size to content and wrap; a wide CSV then fits the
+     page instead of overflowing off the right edge and being clipped. */
+  table-layout: auto;
+  font-size: 0.78rem;
   font-family: var(--font-sans, sans-serif);
 }}
 .chapter-markdown .csv-block th {{
@@ -1220,13 +1251,17 @@ body {{
   font-weight: 600;
   color: var(--ink);
   border-bottom: 1.5px solid var(--ink-muted);
-  white-space: nowrap;
+  /* Wrap instead of nowrap so wide headers don't force horizontal overflow. */
+  white-space: normal;
+  word-break: break-word;
 }}
 .chapter-markdown .csv-block td {{
   padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
   border-bottom: 1px solid var(--surface-variant);
   color: var(--ink);
   vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
 }}
 .chapter-markdown .csv-block tbody tr:nth-child(even) td {{
   background: var(--surface-container-low);
@@ -1555,6 +1590,104 @@ A --> B
         assert!(style_block.contains(".katex"), "katex CSS rule missing from <style>: {}", &style_block[..style_block.len().min(200)]);
         // Shiki block rules should also be present so highlighted code looks right.
         assert!(style_block.contains(".shiki-block"), "shiki block CSS rule missing");
+    }
+
+    #[test]
+    fn build_print_html_forces_light_palette_even_from_dark_theme() {
+        // Regression: exporting a PDF while the app is in DARK mode used to
+        // inject dark colors into :root, printing a dark rectangle floating in
+        // white page margins ("just a box"). A PDF must always be light. We
+        // pass a dark snapshot and assert the output forces the light palette.
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("--surface".to_string(), "#242428".to_string()); // dark
+        vars.insert("--ink".to_string(), "#e6e6e6".to_string()); // light text
+        vars.insert("--font-serif".to_string(), "Newsreader, serif".to_string());
+        let html = build_print_html("Dark export", "<p>hello</p>", &vars);
+        let style_end = html.find("</style>").expect("</style>");
+        let style_block = &html[..style_end];
+        // The forced-light override must be present.
+        assert!(
+            style_block.contains("--surface: #ffffff;"),
+            "forced white --surface missing"
+        );
+        assert!(
+            style_block.contains("--ink: #1f2222;"),
+            "forced dark --ink missing"
+        );
+        // Body must paint pure white so there is never a visible box.
+        assert!(
+            style_block.contains("background: #ffffff;"),
+            "white body background missing"
+        );
+        // The dark snapshot value may still appear once (in the first :root),
+        // but the forced light value must appear AFTER it so it wins by source
+        // order. Assert the forced white --surface comes after the dark one.
+        let dark_pos = style_block.find("--surface: #242428;");
+        let light_pos = style_block
+            .find("--surface: #ffffff;")
+            .expect("light surface present");
+        if let Some(dp) = dark_pos {
+            assert!(
+                light_pos > dp,
+                "forced light --surface must override the dark snapshot (appear later)"
+            );
+        }
+        // The <html> element is pinned to light.
+        assert!(html.contains("data-theme=\"light\""), "PDF html must be light");
+    }
+
+    /// Throwaway helper: dumps a real `build_print_html` output (simulating an
+    /// export while the app is in DARK mode) to /tmp so it can be rendered with
+    /// headless Chrome for a visual sanity check. Gated by #[ignore] so it never
+    /// runs in the normal suite. Run with: `cargo test dump_print_html -- --ignored`.
+    #[test]
+    #[ignore]
+    fn dump_print_html_for_review() {
+        let mut vars = std::collections::HashMap::new();
+        // DARK-mode snapshot — what exportPDF() would pass from dark mode.
+        vars.insert("--surface".to_string(), "#242428".to_string());
+        vars.insert("--surface-variant".to_string(), "#3a3a40".to_string());
+        vars.insert("--surface-container-low".to_string(), "#2c2c30".to_string());
+        vars.insert("--surface-container-lowest".to_string(), "#2a2a2e".to_string());
+        vars.insert("--ink".to_string(), "#e6e6e6".to_string());
+        vars.insert("--ink-secondary".to_string(), "#b0b0b0".to_string());
+        vars.insert("--ink-muted".to_string(), "#888888".to_string());
+        vars.insert("--tertiary".to_string(), "#e06c5a".to_string());
+        vars.insert("--font-serif".to_string(), "Georgia, serif".to_string());
+        vars.insert("--font-sans".to_string(), "Helvetica, sans-serif".to_string());
+        let body = r#"
+<h2>Introduction</h2>
+<p>This paragraph exists to prove the page background is full white, edge to edge, with no dark box even though the export was triggered from dark mode.</p>
+<pre class="shiki-block"><code>fn main() { println!("hello"); }</code></pre>
+<div class="csv-block"><table>
+<thead><tr><th>A really long header column name</th><th>Another quite wide header</th><th>Third wide header here</th><th>Fourth</th><th>Fifth column</th><th>Sixth column header</th></tr></thead>
+<tbody><tr><td>some fairly long cell value</td><td>more text in this cell</td><td>and yet more content</td><td>x</td><td>data</td><td>final column value text</td></tr></tbody>
+</table></div>
+<blockquote>A quoted line to check the accent and contrast.</blockquote>
+"#;
+        let html = build_print_html("Dark Export Sanity Check", body, &vars);
+        let path = std::env::temp_dir().join("mdreader_verify.html");
+        std::fs::write(&path, &html).unwrap();
+        eprintln!("WROTE: {}", path.display());
+    }
+
+    #[test]
+    fn build_print_html_csv_tables_wrap_not_clip() {
+        // Wide CSV tables used to overflow off the page (white-space: nowrap on
+        // headers). They must wrap so the table fits the printable width.
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("--surface".to_string(), "#ffffff".to_string());
+        let html = build_print_html("CSV", "<div class=\"csv-block\"><table></table></div>", &vars);
+        let style_end = html.find("</style>").expect("</style>");
+        let style_block = &html[..style_end];
+        assert!(
+            style_block.contains("word-break: break-word;"),
+            "csv cells must allow wrapping"
+        );
+        assert!(
+            !style_block.contains("white-space: nowrap;"),
+            "csv headers must not be nowrap (that clips wide tables)"
+        );
     }
 
     #[test]
