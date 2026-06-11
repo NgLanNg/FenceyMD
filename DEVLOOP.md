@@ -62,13 +62,13 @@ features in browser mode.
 # dev server (left running across iterations)
 npm run dev                     # http://localhost:1420
 
-# regression suite — 15 end-to-end checks
+# regression suite — 40 end-to-end checks
 node e2e-test.mjs               # nav, render, font/theme/search/bookmark,
                                 # edit-opens, content-loads, preview, etc.
 ```
 
 - **Always re-run `e2e-test.mjs` after a change** — it's the safety net for the
-  deep refactors (lazy-loading, stores split, CSS cleanup) and must stay 15/15.
+  deep refactors (lazy-loading, stores split, CSS cleanup) and must stay 40/40.
 - For anything visual, capture a **Puppeteer screenshot** and actually look at it
   (light + dark, the affected screen). This is how dark-mode contrast, the
   mermaid theming, the Settings modal, and the Root-files landing were checked.
@@ -142,7 +142,7 @@ not per change.
 
 ## Conventions that keep the loop honest
 
-- **Re-run the suite after every change.** 15/15 or it's not done.
+- **Re-run the suite after every change.** 40/40 or it's not done.
 - **Look at screenshots** for visual work — light and dark.
 - **One source of truth per concern:** state in `stores/`, styles in `app.css`
   via CSS variables (so light/dark "just works"), native ops behind `tauri.js`.
