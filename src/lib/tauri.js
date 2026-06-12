@@ -57,3 +57,23 @@ export async function saveClipboardImage(folder, relPath, bytes) {
 export async function openInExternalEditor(path, editorOverride) {
   return invoke('open_in_external_editor', { path, editorOverride: editorOverride || null });
 }
+
+// ── Debug log (file at <app_data_dir>/debug.log, written from JS + Rust) ──
+
+/** Append a structured line to the user-visible debug log. See
+ *  src/lib/debug-log.js for the higher-level `dlog()` helper that adds
+ *  context. Returns nothing — the writer is best-effort and failures are
+ *  swallowed so a broken log can't break the operation. */
+export async function debugLog(line) {
+  try { await invoke('debug_log', { line }); } catch { /* no-op */ }
+}
+
+/** Truncate the debug log. Used by the Settings panel's "Clear" button. */
+export async function debugLogClear() {
+  try { await invoke('debug_log_clear'); } catch { /* no-op */ }
+}
+
+/** Reveal the debug log in Finder/Explorer/xdg-open. */
+export async function debugLogReveal() {
+  try { await invoke('debug_log_reveal'); } catch { /* no-op */ }
+}

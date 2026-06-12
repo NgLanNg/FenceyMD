@@ -16,6 +16,7 @@
   import { resolveChapterLink } from '../lib/link-resolver.js';
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
+  import ZoomOverlay from './ZoomOverlay.svelte';
   let { path, isMobile = false } = $props();
 
   // Editing requires the Tauri backend to save. In dev/browser ?test=1 mode we
@@ -620,6 +621,8 @@
       </div>
     </div>
   {/if}
+
+  <ZoomOverlay />
 
 </div>
 {/if}

@@ -12,43 +12,104 @@ import { navOpen } from './prefs.js';
 // watcher). The panel reads via `runSearch`; this module is the only
 // place that touches the indexer.
 import { buildSearchIndex } from '../cross-search.js';
+import { dlog, dlogStart, dlogEnd } from '../debug-log.js';
 
 // ── Opening folders ──
 export async function openScanResult(scan) {
-  folderRoot.set(scan.root || scan.folder_name);
-  const idx = buildIndexFromRecords(scan.folder_name, scan.files);
-  folderName.set(idx.folderName);
-  folderMeta.set(idx.folderMeta);
-  groupMeta.set(idx.groupMeta);
-  // Rebuild the cross-chapter search index from the freshly-scanned
-  // contents. The panel becomes usable as soon as the user opens it.
-  buildSearchIndex(idx.folderMeta);
-  await loadProgress();
-  route.set({ name: 'home' });
-  editing.set(false);
-  navOpen.set(false);
-  ready.set(true);
-  if (TAURI) invoke('watch_folder', { path: get(folderRoot) }).catch((e) => console.warn('[watch]', e));
+  const id = dlogStart('openScanResult', { root: scan?.root, fileCount: scan?.files?.length });
+  const t0 = performance.now();
+  try {
+    folderRoot.set(scan.root || scan.folder_name);
+    const idx = buildIndexFromRecords(scan.folder_name, scan.files);
+    folderName.set(idx.folderName);
+    folderMeta.set(idx.folderMeta);
+    groupMeta.set(idx.groupMeta);
+    dlog('[openScanResult] index built', { ms: Math.round(performance.now() - t0) });
+    // Rebuild the cross-chapter search index from the freshly-scanned
+    // contents. The panel becomes usable as soon as the user opens it.
+    buildSearchIndex(idx.folderMeta);
+    await loadProgress();
+    dlog('[openScanResult] progress loaded');
+    route.set({ name: 'home' });
+    editing.set(false);
+    navOpen.set(false);
+    ready.set(true);
+    if (TAURI) {
+      invoke('watch_folder', { path: get(folderRoot) })
+        .then(() => dlog('[openScanResult] watch_folder started'))
+        .catch((e) => { dlog('[openScanResult] watch_folder err', e?.message || e); console.warn('[watch]', e); });
+    }
+    dlogEnd(id, 'openScanResult', 'ok', { totalMs: Math.round(performance.now() - t0) });
+  } catch (e) {
+    dlog('[openScanResult] caught', e?.message || String(e), e?.stack);
+    dlogEnd(id, 'openScanResult', 'err', { err: e?.message });
+    throw e;
+  }
 }
 
 export async function pickFolder() {
   if (!TAURI) return;
-  const scan = await invoke('pick_folder');
-  if (scan) await openScanResult(scan);
+  const id = dlogStart('pickFolder');
+  const t0 = performance.now();
+  try {
+    dlog('[pickFolder] awaiting native dialog');
+    const scan = await invoke('pick_folder');
+    if (!scan) {
+      dlog('[pickFolder] user cancelled');
+      dlogEnd(id, 'pickFolder', 'cancelled');
+      return;
+    }
+    dlog('[pickFolder] got scan', { root: scan.root, fileCount: scan.files?.length });
+    await openScanResult(scan);
+    dlogEnd(id, 'pickFolder', 'ok', { totalMs: Math.round(performance.now() - t0) });
+  } catch (e) {
+    dlog('[pickFolder] caught', e?.message || String(e), e?.stack);
+    dlogEnd(id, 'pickFolder', 'err');
+  }
 }
 export async function openFolderPath(path) {
   if (!TAURI) return false;
-  const scan = await invoke('open_folder_path', { path });
-  if (scan) { await openScanResult(scan); return true; }
-  return false;
+  const id = dlogStart('openFolderPath', { path });
+  const t0 = performance.now();
+  try {
+    dlog('[openFolderPath] invoking open_folder_path');
+    const scan = await invoke('open_folder_path', { path });
+    if (!scan) {
+      dlog('[openFolderPath] returned null (path missing or empty)');
+      dlogEnd(id, 'openFolderPath', 'null');
+      return false;
+    }
+    dlog('[openFolderPath] got scan', { root: scan.root, fileCount: scan.files?.length });
+    await openScanResult(scan);
+    dlogEnd(id, 'openFolderPath', 'ok', { totalMs: Math.round(performance.now() - t0) });
+    return true;
+  } catch (e) {
+    dlog('[openFolderPath] caught', e?.message || String(e), e?.stack);
+    dlogEnd(id, 'openFolderPath', 'err');
+    return false;
+  }
 }
 export async function openLast() {
   if (!TAURI) return false;
+  const id = dlogStart('openLast');
+  const t0 = performance.now();
   try {
+    dlog('[openLast] invoking open_last');
     const scan = await invoke('open_last');
-    if (scan) { await openScanResult(scan); return true; }
-  } catch (e) { console.warn('[open_last]', e); }
-  return false;
+    if (!scan) {
+      dlog('[openLast] no last folder');
+      dlogEnd(id, 'openLast', 'none');
+      return false;
+    }
+    dlog('[openLast] got scan', { root: scan.root, fileCount: scan.files?.length });
+    await openScanResult(scan);
+    dlogEnd(id, 'openLast', 'ok', { totalMs: Math.round(performance.now() - t0) });
+    return true;
+  } catch (e) {
+    dlog('[openLast] caught', e?.message || String(e), e?.stack);
+    dlogEnd(id, 'openLast', 'err');
+    return false;
+  }
 }
 export async function getRecents() {
   if (!TAURI) return [];

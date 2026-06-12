@@ -1839,6 +1839,13 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
   color: var(--ink-muted); font-weight: 400;
   margin-top: 2px;
 }
+.settings-row-hint code {
+  font-family: var(--font-mono, monospace);
+  background: var(--surface-container-low);
+  padding: 1px 4px; border-radius: 3px;
+  font-size: 11px;
+}
+.settings-row-actions { display: inline-flex; gap: var(--space-2); }
 
 .settings-seg { display: inline-flex; border: 1px solid var(--surface-variant); border-radius: var(--radius-md); overflow: hidden; }
 .settings-seg button {
@@ -2286,3 +2293,111 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
 @media print {
   .xsearch-panel, .xsearch-backdrop { display: none !important; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ZOOMABLE BLOCKS + FULLSCREEN OVERLAY
+   Wide tables, large images, and rendered diagrams can be expanded to
+   viewport size. The hover button (top-right of the block) opens the
+   overlay; the overlay moves the live DOM node into a centered
+   surface, scales it to fit, and Esc/click-outside closes.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.zoomable {
+  /* The button is absolutely positioned inside the block. */
+  position: relative;
+}
+
+/* Hover button — only visible on hover/focus. We keep the button always
+   present in the DOM (so it's keyboard-reachable via tab) and toggle
+   opacity. The block's hover state shows it. */
+.zoom-icon-btn {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  border: 1px solid var(--surface-variant);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  z-index: 2;
+  padding: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.zoom-icon-btn svg { width: 16px; height: 16px; display: block; }
+.zoomable:hover .zoom-icon-btn,
+.zoom-icon-btn:focus-visible {
+  opacity: 1;
+}
+.zoom-icon-btn:hover {
+  background: var(--tertiary-dim);
+  color: var(--tertiary);
+  border-color: var(--tertiary);
+}
+/* Touch users have no hover — keep the button visible on small screens. */
+@media (hover: none) {
+  .zoom-icon-btn { opacity: 0.85; }
+}
+
+/* Fullscreen overlay — the moved block sits inside .zoom-host. We
+   constrain the host to the viewport with some padding so very wide
+   content still has a margin to grab for scrolling. */
+.zoom-overlay {
+  position: fixed; inset: 0; z-index: 95;
+  background: rgba(15, 16, 16, 0.72);
+  display: flex; align-items: center; justify-content: center;
+  padding: 4vh 4vw;
+  animation: fade-in 0.12s ease;
+}
+.zoom-surface {
+  position: relative;
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  /* No background of its own — the moved block carries its own. */
+}
+.zoom-close {
+  position: absolute;
+  top: 0; right: 0;
+  width: 36px; height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  border: 1px solid var(--surface-variant);
+  border-radius: 8px;
+  cursor: pointer;
+  z-index: 2;
+  padding: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.zoom-close svg { width: 18px; height: 18px; display: block; }
+.zoom-close:hover {
+  background: var(--tertiary-dim);
+  color: var(--tertiary);
+  border-color: var(--tertiary);
+}
+
+.zoom-host {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  overflow: auto;
+}
+/* The moved element retains its own classes; we just constrain its
+   max size and ensure it can scroll if it still overflows. The
+   backdrop is intentionally dark so the user's eye focuses on the
+   block, but we don't force a background — some blocks (an SVG
+   diagram) are transparent and would look strange with a forced fill. */
+.zoom-host > * {
+  max-width: 100%;
+  max-height: 100%;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+}
+/* Tables inside the overlay: keep the row search input usable and
+   allow horizontal scroll for very wide data. */
+.zoom-host table { background: var(--surface); }
+.zoom-host .csv-block { max-width: 100%; }
+

@@ -1,5 +1,5 @@
 <script>
-  import { TAURI } from '../lib/tauri.js';
+  import { TAURI, debugLogReveal, debugLogClear } from '../lib/tauri.js';
   import {
     theme, fontSize, contentWidth, fontSizeLabels, settingsOpen,
     adjustFontSize, adjustContentWidth, pickFolder,
@@ -18,6 +18,15 @@
     if (next === $codeTheme) return;
     codeTheme.set(next);
     setCodeTheme(next);
+  }
+
+  async function revealDebugLog() {
+    if (!TAURI) return;
+    await debugLogReveal();
+  }
+  async function clearDebugLog() {
+    if (!TAURI) return;
+    await debugLogClear();
   }
 </script>
 
@@ -116,6 +125,22 @@
           >Reset all prefs</button>
         </div>
       </div>
+
+      {#if TAURI}
+        <div class="settings-section" data-test-section="debug">
+          <div class="settings-label">Debug</div>
+          <div class="settings-row">
+            <span class="settings-row-name">
+              Activity log
+              <span class="settings-row-hint">A file at <code>app_data_dir/debug.log</code> records what the app was doing. Use it when reporting a bug — the log captures folder open, watcher, render, and unhandled errors.</span>
+            </span>
+            <div class="settings-row-actions">
+              <button class="btn-ghost" onclick={revealDebugLog}>Open log folder</button>
+              <button class="btn-ghost" onclick={clearDebugLog}>Clear log</button>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <div class="settings-foot">
         <span class="settings-build">MD Reader · v1.0.0 · Local-only</span>

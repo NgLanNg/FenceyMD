@@ -92,6 +92,92 @@ fn record_open(app: &AppHandle, root: &str) {
     write_store(app, &store);
 }
 
+// ── Debug log (file-based, for the user to inspect) ──────────────────────────
+//
+// When something goes wrong on the JS side (e.g. "I clicked a recent folder
+// and nothing happened") the console is hidden inside the WKWebView. This log
+// lives at `<app_data_dir>/debug.log` and is appended to from a JS helper
+// (see src/lib/debug-log.js). Every folder-open path writes a trace here
+// so we can see exactly where the chain broke.
+//
+// The log is append-only and rotated lazily — users can clear it from the
+// Settings panel. We never read it back into the UI automatically; the
+// "Open debug log folder" button in Settings hands the path to the OS.
+
+fn debug_log_path(app: &AppHandle) -> PathBuf {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("debug.log")
+}
+
+/// Append a single line to the debug log. Best-effort — failures are
+/// swallowed (we never want the log writer to break the actual operation).
+/// `line` should already be a single line; newlines are escaped here.
+#[tauri::command]
+fn debug_log(app: AppHandle, line: String) {
+    let path = debug_log_path(&app);
+    // ISO-8601-ish local timestamp, second precision. Cheap to format
+    // and easy to grep. SystemTime / UNIX_EPOID gives us UTC seconds.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let safe = line.replace('\n', "\\n").replace('\r', "\\r");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, format!("[{ts}] {safe}\n").as_bytes()));
+}
+
+/// Truncate the debug log (called from Settings → "Clear debug log").
+#[tauri::command]
+fn debug_log_clear(app: AppHandle) -> Result<(), String> {
+    let path = debug_log_path(&app);
+    std::fs::write(&path, b"").map_err(|e| e.to_string())
+}
+
+/// Return the absolute path of the debug log. Used by the Settings panel
+/// to label the "Reveal in Finder" button.
+#[tauri::command]
+fn debug_log_path_str(app: AppHandle) -> String {
+    debug_log_path(&app).to_string_lossy().to_string()
+}
+
+/// Reveal the debug log in the OS file browser (Finder / Explorer / xdg-open).
+/// Falls back to opening the parent dir if the file doesn't exist yet.
+#[tauri::command]
+fn debug_log_reveal(app: AppHandle) -> Result<(), String> {
+    let path = debug_log_path(&app);
+    let target = if path.exists() { path.clone() } else { path.parent().unwrap_or(&path).to_path_buf() };
+    let target_str = target.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    {
+        // `open -R` reveals the file in Finder; `open <dir>` opens the dir.
+        let mut cmd = Command::new("open");
+        if path.exists() {
+            cmd.arg("-R").arg(&target_str);
+        } else {
+            cmd.arg(&target_str);
+        }
+        let _ = cmd.spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("explorer").arg(&target_str).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = Command::new("xdg-open").arg(&target_str).spawn();
+    }
+    // Suppress unused-variable warnings on platforms where `app` isn't read.
+    let _ = app;
+    Ok(())
+}
+
 // ── Folder scanning ──────────────────────────────────────────────────────────
 
 /// Recursively scan `root` for `.md` files, returning their relative paths +
@@ -147,7 +233,19 @@ fn scan_folder(root: &Path) -> ScanResult {
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Option<ScanResult> {
     let dir = rfd::AsyncFileDialog::new().pick_folder().await?;
+    log_from_rust(&app, &format!("[rust] pick_folder: scanning {}", dir.path().display()));
+    let scan_start = std::time::Instant::now();
     let result = scan_folder(dir.path());
+    let total_bytes: usize = result.files.iter().map(|f| f.content.len()).sum();
+    log_from_rust(
+        &app,
+        &format!(
+            "[rust] pick_folder: files={} bytes={} elapsed_ms={}",
+            result.files.len(),
+            total_bytes,
+            scan_start.elapsed().as_millis()
+        ),
+    );
     record_open(&app, &result.root);
     Some(result)
 }
@@ -158,9 +256,42 @@ async fn pick_folder(app: AppHandle) -> Option<ScanResult> {
 fn open_folder_path(app: AppHandle, path: String) -> Option<ScanResult> {
     let p = Path::new(&path);
     if !p.is_dir() {
+        eprintln!("[md-reader] open_folder_path: path is not a dir: {path}");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(debug_log_path(&app))
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, format!("[rust] open_folder_path: not a dir: {path}\n").as_bytes())
+            });
         return None;
     }
+    let scan_start = std::time::Instant::now();
     let result = scan_folder(p);
+    let elapsed = scan_start.elapsed();
+    let total_bytes: usize = result.files.iter().map(|f| f.content.len()).sum();
+    eprintln!(
+        "[md-reader] open_folder_path: scanned {} files, {} bytes, {:?}",
+        result.files.len(),
+        total_bytes,
+        elapsed
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(debug_log_path(&app))
+        .and_then(|mut f| {
+            std::io::Write::write_all(
+                &mut f,
+                format!(
+                    "[rust] open_folder_path: path={path} files={} bytes={} elapsed_ms={}\n",
+                    result.files.len(),
+                    total_bytes,
+                    elapsed.as_millis()
+                )
+                .as_bytes(),
+            )
+        });
     record_open(&app, &result.root);
     Some(result)
 }
@@ -1329,6 +1460,7 @@ fn watch_folder(app: AppHandle, state: tauri::State<'_, WatcherState>, path: Str
             if res.is_err() {
                 return;
             }
+            log_from_rust(&app_for_cb, "[rust] watcher fired, re-scanning");
             let result = scan_folder(&root_for_cb);
             let _ = app_for_cb.emit("library-changed", result);
         },
@@ -1340,6 +1472,8 @@ fn watch_folder(app: AppHandle, state: tauri::State<'_, WatcherState>, path: Str
         .watch(&root, RecursiveMode::Recursive)
         .map_err(|e| e.to_string())?;
 
+    log_from_rust(&app, &format!("[rust] watch_folder: started on {}", root.display()));
+
     // Keep the debouncer alive by storing it in managed state (drops the old one).
     *state.lock().unwrap() = Some(debouncer);
     Ok(())
@@ -1349,6 +1483,21 @@ fn watch_folder(app: AppHandle, state: tauri::State<'_, WatcherState>, path: Str
 #[tauri::command]
 fn scan_path(path: String) -> ScanResult {
     scan_folder(Path::new(&path))
+}
+
+/// Internal helper: append a one-shot line to the debug log from Rust code
+/// (e.g. the watcher, the PDF pipeline). Same format as the JS-side log.
+fn log_from_rust(app: &AppHandle, line: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let safe = line.replace('\n', "\\n").replace('\r', "\\r");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(debug_log_path(app))
+        .and_then(|mut f| std::io::Write::write_all(&mut f, format!("[{ts}] {safe}\n").as_bytes()));
 }
 
 fn main() {
@@ -1372,6 +1521,10 @@ fn main() {
             rename_file,
             watch_folder,
             scan_path,
+            debug_log,
+            debug_log_clear,
+            debug_log_path_str,
+            debug_log_reveal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

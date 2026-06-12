@@ -200,6 +200,36 @@ export async function enhance(area, meta = {}) {
   //    on the same area are no-ops, so callers can call `enhance()`
   //    freely on every chapter navigation.
   stampAnchors(area);
+
+  // 5. Make wide / visual blocks zoomable. Each candidate element gets
+  //    a hover button that opens the element in a viewport-sized
+  //    overlay. The list is a CSS-selector set, not a Svelte action,
+  //    because enhance() runs against raw DOM and we don't have a
+  //    Svelte context here. The zoomable.js helper handles the rest.
+  applyZoomable(area);
+}
+
+/**
+ * Tag every wide or visual block inside `area` with the `zoomable`
+ * class + a hover button. Idempotent: re-runs are no-ops because the
+ * button carries `data-zoomable-btn` and the wrapper class is checked
+ * before any DOM mutation.
+ *
+ * The list of selectors mirrors the calm reading brand: anything
+ * that benefits from a "look at it bigger" affordance, and nothing
+ * else. Code fences and math blocks stay inline — they have their
+ * own copy / scroll affordances and are rarely the thing the user
+ * wants to zoom.
+ */
+function applyZoomable(area) {
+  if (!area || typeof document === 'undefined') return;
+  // Lazy import — this is a UI affordance and shouldn't pull the
+  // ZoomOverlay module into the SSR/PDF path. The function is a
+  // no-op in the PDF pipeline (isPdf=true) because the build_print_html
+  // branch doesn't call enhance() at all — only the live reader does.
+  import('../components/zoomable.js').then(({ applyZoomable: apply }) => {
+    apply(area);
+  }).catch(() => { /* best-effort UI affordance */ });
 }
 
 // Wrap a `<pre>` in a `.code-block-wrapper` with a copy button. Used
