@@ -132,6 +132,20 @@ tour of every feature. Load it with `?test=1`.
 
 ---
 
+## More
+
+- [`SNAPSHOT.md`](SNAPSHOT.md) — capture the app window to the
+  clipboard. Toolbar button or `⌘⇧S`. Standalone test harness for
+  diagnosing capture failures.
+- [`DEBUG.md`](DEBUG.md) — the file-based activity log
+  (`<app_data_dir>/debug.log`). How to read it, what gets logged,
+  recipes for common failures.
+- [`DEVLOOP.md`](DEVLOOP.md) — the working loop for changes (build,
+  e2e, cargo, bundle, confirm).
+- [`ROADMAP.md`](ROADMAP.md) — what's next (v1.1, v2).
+
+---
+
 ## Roadmap
 
 **WIP: AI-agent integration.** MD Reader is being designed to be
