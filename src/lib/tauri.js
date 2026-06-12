@@ -77,3 +77,21 @@ export async function debugLogClear() {
 export async function debugLogReveal() {
   try { await invoke('debug_log_reveal'); } catch { /* no-op */ }
 }
+
+// ── Window snapshot (screen capture → clipboard) ───────────────────────────
+
+/** Snapshot the MD Reader window to the system clipboard. Returns the
+ *  dimensions of the captured image so the UI can show a confirmation
+ *  toast ("Copied 1100 × 820 to clipboard") without re-encoding.
+ *
+ *  Today: full app layout. The Rust command is `snapshot_app_to_clipboard`.
+ *  Future: pass `{ x, y, w, h }` to take a region-only capture; the
+ *  JS side is structured so that addition is one extra optional arg.
+ *
+ *  Throws if the platform refuses (e.g. permission denied on a future
+ *  macOS). The caller should surface a friendly message in that case
+ *  rather than retry. */
+export async function snapshotApp() {
+  if (!TAURI) throw new Error('snapshot requires Tauri runtime');
+  return invoke('snapshot_app_to_clipboard');
+}

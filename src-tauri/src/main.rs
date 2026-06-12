@@ -558,6 +558,96 @@ fn copy_image(bytes: Vec<u8>) -> Result<(), String> {
     cb.set_image(data).map_err(|e| e.to_string())
 }
 
+/// Snapshot the MD Reader window to the system clipboard.
+///
+/// The user-visible affordance is "take a snapshot of what the app looks
+/// like right now and put it on the clipboard so I can paste it
+/// somewhere". The first cut captures the entire OS window (chrome
+/// + content). A future cut can take a `(x, y, w, h)` rect for
+/// region-select; the JS side is already structured around that
+/// extension point — see `snapshotApp()` in src/lib/tauri.js.
+///
+/// Capturing your OWN app's window does not require screen-recording
+/// permission on any of the supported platforms: on macOS xcap goes
+/// through CGWindowListCreateImage which allows self-capture; on
+/// Windows the app is just sampling its own HWND; on Linux X11
+/// ignores the security extension for the focused window. We still
+/// fall through to a clean error string if the platform refuses, so
+/// the UI can surface a hint instead of silently failing.
+#[tauri::command]
+fn snapshot_app_to_clipboard(app: AppHandle) -> Result<SnapshotInfo, String> {
+    log_from_rust(&app, "[rust] snapshot_app_to_clipboard: start");
+    // We identify our window by app name + owning pid rather than by
+    // title, because the title contains the chapter name and we want
+    // a stable match. xcap's `Window::all()` exposes both.
+    let pid = std::process::id();
+    let windows = xcap::Window::all().map_err(|e| {
+        log_from_rust(&app, &format!("[rust] snapshot: xcap::Window::all failed: {e}"));
+        format!("enumerate windows failed: {e}")
+    })?;
+    // xcap returns Result from every accessor. We swallow inner errors
+    // because the comparison short-circuits on Err() via `.unwrap_or`,
+    // which is the conventional way to ask "is this still our window"
+    // when the platform doesn't expose that exact field.
+    let me = windows
+        .into_iter()
+        .find(|w| {
+            let minimized = w.is_minimized().unwrap_or(true);
+            if minimized {
+                return false;
+            }
+            let wpid = w.pid().unwrap_or(0);
+            if wpid == pid {
+                return true;
+            }
+            // Fallback: match by app name. Title changes per chapter.
+            w.app_name()
+                .map(|n| n.to_lowercase().contains("md reader"))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| {
+            log_from_rust(&app, "[rust] snapshot: no matching window found");
+            "MD Reader window not found".to_string()
+        })?;
+
+    let img = me.capture_image().map_err(|e| {
+        log_from_rust(&app, &format!("[rust] snapshot: capture_image failed: {e}"));
+        format!("capture failed: {e}")
+    })?;
+    let (w, h) = (img.width(), img.height());
+    let rgba = img.into_raw();
+    let data = arboard::ImageData {
+        width: w as usize,
+        height: h as usize,
+        bytes: std::borrow::Cow::Owned(rgba),
+    };
+    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    cb.set_image(data).map_err(|e| e.to_string())?;
+    let info = SnapshotInfo {
+        width: w,
+        height: h,
+        bytes: w as usize * h as usize * 4,
+    };
+    log_from_rust(
+        &app,
+        &format!(
+            "[rust] snapshot: ok {}x{} ({} bytes RGBA)",
+            info.width, info.height, info.bytes
+        ),
+    );
+    Ok(info)
+}
+
+/// Returned to the JS side after a successful snapshot. Lets the UI
+/// show a confirmation toast with the dimensions ("Copied 1100 × 820
+/// to clipboard") without re-encoding the image.
+#[derive(Serialize)]
+struct SnapshotInfo {
+    width: u32,
+    height: u32,
+    bytes: usize,
+}
+
 /// Save a pasted clipboard image as `<folder>/<rel_path>` and return the
 /// absolute path actually written. `rel_path` is relative to `folder` and is
 /// canonicalize-checked against the chosen folder — same traversal defense
@@ -1525,6 +1615,7 @@ fn main() {
             debug_log_clear,
             debug_log_path_str,
             debug_log_reveal,
+            snapshot_app_to_clipboard,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

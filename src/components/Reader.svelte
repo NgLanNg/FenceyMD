@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte';
-  import { TAURI, saveBytes, printPDF } from '../lib/tauri.js';
+  import { TAURI, saveBytes, printPDF, snapshotApp } from '../lib/tauri.js';
   import { renderMarkdown, enhance } from '../lib/markdown.js';
   import { labelFromName } from '../lib/index.js';
   import {
@@ -17,6 +17,7 @@
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
   import ZoomOverlay from './ZoomOverlay.svelte';
+  import { dlog } from '../lib/debug-log.js';
   let { path, isMobile = false } = $props();
 
   // Editing requires the Tauri backend to save. In dev/browser ?test=1 mode we
@@ -284,6 +285,35 @@
     if (pdfToast) { pdfToast.remove(); pdfToast = null; }
   }
 
+  // Snapshot the app's own window to the system clipboard. Triggered
+  // by the toolbar button or ⌘⇧S (Ctrl+Shift+S on non-mac). Same
+  // toast plumbing as exportPDF so the user gets a quick "Copied
+  // 1100×820" confirmation. Reuses pdfToast — it's not in flight
+  // because we only run when not exporting.
+  let snapshotBusy = $state(false);
+  async function takeSnapshot() {
+    if (snapshotBusy || !TAURI) return;
+    snapshotBusy = true;
+    showPdfToast('Snapshotting…');
+    dlog('[snapshot] start');
+    try {
+      const info = await snapshotApp();
+      dlog('[snapshot] ok', info);
+      // info = { width, height, bytes } — show dimensions so the user
+      // can tell at a glance how big the capture was.
+      showPdfToast(`Copied ${info.width} × ${info.height} to clipboard.`);
+      setTimeout(() => hidePdfToast(), 1800);
+    } catch (e) {
+      dlog('[snapshot] err', e?.message || String(e));
+      showPdfToast('Snapshot failed: ' + (e?.message || String(e)));
+      setTimeout(() => hidePdfToast(), 3000);
+      // eslint-disable-next-line no-console
+      console.warn('[snapshot]', e);
+    } finally {
+      snapshotBusy = false;
+    }
+  }
+
   async function exportPDF() {
     if (pdfBusy || !TAURI) return;
     pdfBusy = true;
@@ -420,6 +450,15 @@
     }
     if (e.key === 'ArrowLeft' && sib.prev) goChapter(sib.prev.path);
     else if (e.key === 'ArrowRight' && sib.next) goChapter(sib.next.path);
+    // ⌘⇧S (Ctrl+Shift+S on non-mac) — snapshot the app window to the
+    // system clipboard. We don't claim ⌘⇧4 because that's the macOS
+    // system-wide region-select shortcut; colliding with it is
+    // surprising. ⌘S is the editor's save, so ⇧ is a natural "save
+    // as something else" modifier.
+    else if (e.shiftKey && (e.metaKey || e.ctrlKey) && (e.key === 'S' || e.key === 's')) {
+      e.preventDefault();
+      takeSnapshot();
+    }
     else if (e.key === 'g' || e.key === 'G') {
       const now = performance.now();
       if (e.key === 'G') {
@@ -508,6 +547,16 @@
           </button>
           <button class="tool-btn" onclick={exportPDF} disabled={pdfBusy} title="Export as PDF" aria-label="Export as PDF">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="12" y2="12"/><line x1="15" y1="15" x2="12" y2="12"/></svg>
+          </button>
+          <button class="tool-btn" onclick={takeSnapshot} disabled={snapshotBusy} title="Snapshot window to clipboard (⌘⇧S)" aria-label="Snapshot to clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <!-- Camera icon: body + lens + viewfinder. The viewfinder
+                   squiggle alludes to "this is a screenshot of the
+                   window" so it doesn't read as "take a photo". -->
+              <path d="M3 7h3l2-3h8l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/>
+              <circle cx="12" cy="13" r="3.5"/>
+              <path d="M9 6.5h6" stroke-dasharray="1 1.5"/>
+            </svg>
           </button>
           <button class="tool-btn {bookmarked ? 'bookmarked' : ''}" onclick={() => toggleBookmark(item)} title="Bookmark this chapter" aria-label="Bookmark">
             <svg viewBox="0 0 24 24" fill={bookmarked ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
@@ -611,6 +660,7 @@
           <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>F</kbd></span><span>Find in chapter</span></div>
           <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>F</kbd></span><span>Search across chapters</span></div>
           <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>P</kbd></span><span>Export chapter as PDF</span></div>
+          <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>S</kbd></span><span>Snapshot window to clipboard</span></div>
           <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>⌘</kbd><kbd>S</kbd></span><span>Save (in edit mode)</span></div>
           <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>e</kbd></span><span>Edit current chapter</span></div>
           <div class="cheatsheet-row"><span class="cheatsheet-keys"><kbd>Esc</kbd></span><span>Clear search / close</span></div>

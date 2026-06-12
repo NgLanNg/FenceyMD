@@ -19,6 +19,11 @@ notify = "6"
 notify-debouncer-mini = "0.4"
 arboard = "3"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Cross-platform screen capture. Used to snapshot the app's own window
+# onto the system clipboard (no screen-recording permission needed for
+# self-capture). On macOS this goes through CGWindowListCreateImage;
+# on Linux via X11/Wayland; on Windows via DXGI.
+xcap = "0.9"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
