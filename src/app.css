@@ -179,6 +179,7 @@
       --tertiary-dim: rgba(163, 62, 52, 0.08);
       --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
       --font-sans: 'Inter', -apple-system, system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
       --space-1: 0.25rem;
       --space-2: 0.5rem;
       --space-3: 0.75rem;
@@ -424,6 +425,17 @@
     .code-block-wrapper .copy-btn:hover { color: var(--ink); background: var(--surface-variant); }
     .search-highlight { background: #fef08a; border-radius: 2px; padding: 0 1px; }
     [data-theme="dark"] .search-highlight { background: #713f12; }
+    /* Settings > Font family (v1.1 #9). The store sets
+       [data-font-family="sans|serif|mono"] on <html>; we remap the
+       --font-* variables so every component that already uses
+       var(--font-serif) / var(--font-sans) / var(--font-mono)
+       automatically picks up the right stack. */
+    [data-font-family="sans"] {
+      --font-serif: var(--font-sans);
+    }
+    [data-font-family="mono"] {
+      --font-serif: var(--font-mono);
+    }
     .chapter-markdown {
       font-family: var(--font-serif);
       font-size: 1rem;
@@ -2048,19 +2060,17 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
 .math-render:has(.katex-display) { display: block; text-align: center; }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   SYNTAX HIGHLIGHT (shiki) — dual-theme (light + dark) via CSS variables.
-   Shiki outputs `style="color:#light;--shiki-dark:#dark"` on each span; we
-   swap which one is active based on the root data-theme.
+   SYNTAX HIGHLIGHT (shiki) — dual-theme via re-render.
+
+   Shiki 1.29 emits `style="color:#active;--shiki-<inactive>:#inactive"`
+   on every span, where the "active" color is the one matching
+   `defaultColor` in the renderer config. We re-render the blocks
+   whenever the app's data-theme changes (see rethemeForDarkMode in
+   src/lib/renderers/shiki.js) so the active color always matches the
+   current app theme. The CSS below just cleans up the wrapper.
    ═══════════════════════════════════════════════════════════════════════ */
 
-.shiki-block { background: var(--shiki-light-bg, #ffffff); color: var(--shiki-light, #24292f); }
 .shiki-block code { background: transparent; border: none; padding: 0; color: inherit; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.82rem; line-height: 1.7; }
-.shiki { background: var(--shiki-light-bg, #ffffff) !important; color: var(--shiki-light, #24292f) !important; }
-.shiki span { color: var(--shiki-light, #24292f); }
-/* Dark theme overrides — shiki places the dark colour on --shiki-dark. */
-[data-theme="dark"] .shiki { background: var(--shiki-dark-bg, #0d1117) !important; color: var(--shiki-dark, #e6edf3) !important; }
-[data-theme="dark"] .shiki span { color: var(--shiki-dark, #e6edf3); }
-[data-theme="dark"] .shiki span[style*="--shiki-dark-bg"] { background-color: var(--shiki-dark-bg) !important; }
 /* Keep code blocks within the chapter's card. */
 .chapter-markdown .shiki-block {
   border: 1px solid var(--surface-variant);

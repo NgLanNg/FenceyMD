@@ -1,5 +1,6 @@
 // Persisted UI preferences: theme, reading font size, content width, nav state.
 import { writable, get } from 'svelte/store';
+import { rethemeForDarkMode } from '../renderers/shiki.js';
 
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
@@ -71,6 +72,11 @@ if (typeof document !== 'undefined') {
   theme.subscribe((v) => {
     document.documentElement.setAttribute('data-theme', v);
     lsSet('md-reader-theme', v);
+    // Re-render shiki code blocks with the new dark/light value so
+    // they emit the dark/light inline color pair (instead of
+    // sticking with the previously-rendered single color). No-op if
+    // there are no shiki blocks on the page yet.
+    rethemeForDarkMode(v === 'dark');
   });
   fontSize.subscribe((v) => {
     document.documentElement.setAttribute('data-font-size', v || '');

@@ -62,12 +62,20 @@ async function getShiki() {
 // Pick the shiki `themes` option based on the active code theme. The
 // `defaultColor` controls which side of the dual theme shiki considers
 // the "primary" one for the wrapper's own background/color.
+//
+// Shiki v1.29's `themes` option is a *Record* of named entries
+// (e.g. `{ light: 'github-light', dark: 'github-dark' }`) — passing
+// a bare string makes shiki index it as `[0]` and emit the
+// "Theme `n` not found" warning. We always return a Record; for the
+// 'nord' path we still register it as a single-entry record so the
+// produced HTML uses nord's colors and the CSS rule for
+// [data-code-theme="nord"] controls the wrapper background.
 function pickThemes(codeTheme, dark) {
   if (codeTheme === 'nord') {
     // Single dark theme — shiki emits one color per span and uses
     // nord's own background. CSS for [data-code-theme="nord"] forces
     // #2E3440 as the wrapper background regardless of app mode.
-    return { themes: 'nord', defaultColor: 'dark' };
+    return { themes: { dark: 'nord' }, defaultColor: 'dark' };
   }
   // Default: dual github-light / github-dark. Spans carry
   // `--shiki-dark` inline variables; CSS swaps which is active.
@@ -197,6 +205,20 @@ export async function highlightCodeBlocks(area, dark) {
 export function setCodeTheme(themeName) {
   if (themeName === _codeTheme) return;
   _codeTheme = themeName;
+  if (typeof document === 'undefined') return;
+  for (const area of document.querySelectorAll('.chapter-markdown')) {
+    restoreShikiBlocks(area);
+    highlightIn(area, _dark).catch((e) => console.warn('[shiki retheme]', e?.message || e));
+  }
+}
+
+// Force re-render every shiki block with the CURRENT code theme but the
+// NEW dark/light value. Called from the theme subscribe so that switching
+// light → dark (or vice versa) emits the dark/light inline color pair
+// instead of leaving the previously-rendered single color in place.
+// `dark` is the new app theme.
+export function rethemeForDarkMode(dark) {
+  _dark = !!dark;
   if (typeof document === 'undefined') return;
   for (const area of document.querySelectorAll('.chapter-markdown')) {
     restoreShikiBlocks(area);
