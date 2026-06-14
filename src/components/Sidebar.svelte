@@ -1,4 +1,31 @@
 <script>
+  /**
+   * Sidebar.svelte — the persistent left-hand navigation pane.
+   *
+   * Single responsibility: render the app chrome around the chapter tree —
+   * brand/home button, folder switcher (recents + Open), the chapter filter
+   * box, Home/Settings entries, the Bookmarks shortcut list, and the
+   * theme/footer controls. The recursive chapter tree itself is delegated to
+   * <SidebarTree>; this component only assembles its input and the surrounding
+   * UI.
+   *
+   * Collaborators:
+   *   - stores.js: reads reactive state ($folderMeta, $route, $progressMap,
+   *     $theme, $folderName) and invokes navigation/library actions
+   *     (goHome, goChapter, pickFolder, openFolderPath, getRecents).
+   *   - index.js: pure helpers (buildFolderTree, labelFromName) — no DOM.
+   *   - tauri.js: TAURI flag gates desktop-only affordances (Open Folder);
+   *     in the browser build those buttons are hidden.
+   *
+   * Invariants / assumptions a maintainer must know:
+   *   - Two parallel path identities flow through here. `diskPath` is the full
+   *     path under the chosen root (used as the watcher/progress key); `path`
+   *     is group-stripped and is what the router/Reader navigate by. The tree
+   *     is built from `diskPath` (so group folders survive) but carries the
+   *     nav `path` along as `navPath` — see `sidebarTree` below.
+   *   - This is a presentation/glue component: it owns only ephemeral UI state
+   *     (filter text, menu open). All durable state lives in the stores.
+   */
   import { TAURI } from '../lib/tauri.js';
   import {
     folderName, folderMeta, route, progressMap, theme,
@@ -8,11 +35,18 @@
   import { labelFromName, buildFolderTree } from '../lib/index.js';
   import SidebarTree from './SidebarTree.svelte';
 
+  // `isMobile` flips collapse behaviour: mobile closes the drawer (navOpen),
+  // desktop collapses the rail (navCollapsed). See collapseNav().
   let { isMobile = false } = $props();
 
   // Full nested tree built from each file's *disk* path so top-level group
   // folders AND their subfolders are preserved. `navPath` keeps the
   // group-stripped path the router/Reader navigate by.
+  //
+  // WHY map path<-diskPath: buildFolderTree splits on `path` to derive the
+  // folder hierarchy. Feeding it the group-stripped `path` would flatten away
+  // the top-level group folder, so we substitute `diskPath` for the build and
+  // stash the real nav path as `navPath` for SidebarTree to navigate by.
   const sidebarTree = $derived(
     buildFolderTree($folderMeta.map((f) => ({ ...f, path: f.diskPath, navPath: f.path })))
   );
@@ -21,33 +55,64 @@
   let menuOpen = $state(false);
   let recents = $state([]);
 
+  // Bookmarked chapters, surfaced as a flat shortcut list above the tree.
+  // Progress is keyed by diskPath; `|| f.path` covers ungrouped folders where
+  // the two coincide and diskPath may be the bare filename.
   const bookmarks = $derived(
     $folderMeta.filter((f) => $progressMap[f.diskPath || f.path]?.bookmarked)
   );
 
+  /**
+   * True when `item` is the chapter currently being read.
+   * Compares the router's group-stripped path against the item's nav `path`
+   * (NOT diskPath) — the route stores the nav path. Used to mark the active
+   * row in the Bookmarks list.
+   */
   function isCurrent(item) {
     return $route.name === 'chapter' && $route.path === item.path;
   }
 
+  /**
+   * Toggle the folder switcher dropdown. When opening, refresh the recents
+   * list and drop entries whose folder no longer exists on disk (`exists`),
+   * so we never offer a dead path. Closing is a pure state flip.
+   */
   async function toggleMenu() {
     if (menuOpen) { menuOpen = false; return; }
     recents = (await getRecents()).filter((r) => r.exists);
     menuOpen = true;
   }
+  // Close the menu before the (async) folder swap so the dropdown doesn't
+  // linger while the new library loads.
   async function chooseRecent(path) { menuOpen = false; await openFolderPath(path); }
   async function chooseOpen() { menuOpen = false; await pickFolder(); }
 
+  /**
+   * Hide the nav. Desktop and mobile use different stores: mobile is a modal
+   * drawer (navOpen=false), desktop is a collapsible rail (navCollapsed=true).
+   * Also dismisses the folder menu so it can't outlive a collapsed sidebar.
+   */
   function collapseNav() {
     menuOpen = false;
     if (isMobile) navOpen.set(false);
     else navCollapsed.set(true);
   }
 
+  // Navigate to a chapter from the Bookmarks list. (goChapter already closes
+  // the mobile drawer; we only need to dismiss the folder menu here.)
   function navTo(path) { menuOpen = false; goChapter(path); }
 
+  /**
+   * svelte:document click handler — closes the folder menu on any click that
+   * lands outside it. Bound only while menuOpen so it short-circuits cheaply
+   * otherwise.
+   */
   function closeMenuOnOutsideClick(e) {
     if (!menuOpen) return;
-    if (!(e.target).closest('.folder-menu') && !(e.target).closest('.sidebar-iconbtn')) {
+    // `e.target` isn't guaranteed to be an Element (text nodes, some SVG
+    // targets), and `.closest` only exists on Element — guard before calling.
+    const t = e.target instanceof Element ? e.target : null;
+    if (!t || (!t.closest('.folder-menu') && !t.closest('.sidebar-iconbtn'))) {
       menuOpen = false;
     }
   }
@@ -60,7 +125,7 @@
   <div class="sidebar-brand">
     <div class="sidebar-brand-row">
       <button class="sidebar-brand-btn" onclick={goHome} title="Library overview">
-        <span class="sidebar-brand-name">MD Reader</span>
+        <span class="sidebar-brand-name">FenceyMD</span>
       </button>
       <button class="sidebar-iconbtn" onclick={collapseNav} title="Hide navigation" aria-label="Hide navigation">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>

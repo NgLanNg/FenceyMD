@@ -11,19 +11,19 @@ straight to it.
 `<app_data_dir>/debug.log`. On macOS:
 
 ```
-~/Library/Application Support/com.mdreader.app/debug.log
+~/Library/Application Support/com.fenceymd.app/debug.log
 ```
 
 On Linux:
 
 ```
-~/.local/share/com.mdreader.app/debug.log
+~/.local/share/com.fenceymd.app/debug.log
 ```
 
 On Windows:
 
 ```
-%APPDATA%\com.mdreader.app\debug.log
+%APPDATA%\com.fenceymd.app\debug.log
 ```
 
 It's append-only, timestamped (UTC seconds since epoch in `[…]`
@@ -38,13 +38,13 @@ Finder / Explorer / xdg-open) or "Clear log" (truncates the file).
 
 ```bash
 # macOS
-tail -f ~/Library/Application\ Support/com.mdreader.app/debug.log
+tail -f ~/Library/Application\ Support/com.fenceymd.app/debug.log
 
 # Linux
-tail -f ~/.local/share/com.mdreader.app/debug.log
+tail -f ~/.local/share/com.fenceymd.app/debug.log
 
 # or just open it
-open ~/Library/Application\ Support/com.mdreader.app/debug.log
+open ~/Library/Application\ Support/com.fenceymd.app/debug.log
 ```
 
 The file is small (a few KB per session). Tail it in another

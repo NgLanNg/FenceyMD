@@ -1,4 +1,4 @@
-# MD Reader — Project Status
+# FenceyMD — Project Status
 
 **Snapshot date:** 2026-06-12
 **Branch:** `feat/v1.1-wave-3`
@@ -79,7 +79,7 @@ Items marked ⚠️ need a quick audit. They were marked "✅ done" in commit me
 Driven diagnostic surfaced two real bugs in the editor:
 
 1. **Plain Enter inside a code block didn't exit the block** (Tiptap's default is to add a soft newline; you need Mod-Enter to leave, which is unexpected for prose authors). Fixed via a new `CodeBlockEnterExtension` Tiptap extension that overrides the Enter keymap to call `exitCode()` when the cursor is inside a code block. Verified by clicking into a code block, pressing Enter, typing — new paragraph appears below the block, cursor in it.
-2. **Mobile/tablet sidebar drawer (z-index 40) was hidden behind the reader toolbar (z-index 50)** at viewport widths ≤768px. Result: opening the sidebar hid the brand row and close chevron. Bumped drawer to z-index 100, backdrop to 95. Now the full sidebar (MD Reader + close + folder) is visible at all drawer sizes.
+2. **Mobile/tablet sidebar drawer (z-index 40) was hidden behind the reader toolbar (z-index 50)** at viewport widths ≤768px. Result: opening the sidebar hid the brand row and close chevron. Bumped drawer to z-index 100, backdrop to 95. Now the full sidebar (FenceyMD + close + folder) is visible at all drawer sizes.
 
 Editor bugs **deferred** (need library or deeper rewrite to fix):
 - **Code-block toggle button (`</>`) destroys the code block in the preview** when you click it on a non-empty code block — the `tiptap-markdown` v0.9.0 serializer renders the result as inline `code` spans instead of a new code-block boundary. Workaround: don't toggle off an existing code block from the button — edit through it instead. Or upgrade `tiptap-markdown` to a version that handles this correctly. **Out of scope for this session.**

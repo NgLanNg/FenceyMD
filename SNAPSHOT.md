@@ -1,6 +1,6 @@
 # Snapshot — capture the app window to the clipboard
 
-A "snapshot" in MD Reader is a screenshot of the app's own window,
+A "snapshot" in FenceyMD is a screenshot of the app's own window,
 pushed to the system clipboard so you can paste it into Slack, Notes,
 Finder, Preview, or any other app. Captures the full app layout
 (chrome + page content) at native resolution (Retina-aware — a
@@ -23,7 +23,7 @@ Finder, Preview, or any other app. Captures the full app layout
 **From the UI:** click the camera icon in the reader toolbar (between
 the PDF-export and bookmark icons).
 
-Both paths do the same thing: capture the foreground MD Reader window,
+Both paths do the same thing: capture the foreground FenceyMD window,
 push the PNG to the clipboard, and show a toast like:
 
 ```
@@ -95,7 +95,7 @@ can verify capture + clipboard without going through the WebView. This
 is the diagnostic tool of choice when a snapshot stops working.
 
 ```bash
-# Make sure /Applications/MD Reader.app is open, then:
+# Make sure /Applications/FenceyMD.app is open, then:
 cd src-tauri
 cargo run --release --example snapshot_test
 ```
@@ -104,7 +104,7 @@ Output (success):
 ```
 [snapshot-test] start
 [snapshot-test] found 30 windows
-[snapshot-test] picked window: app_name=Some("MD Reader") title=Some("MD Reader")
+[snapshot-test] picked window: app_name=Some("FenceyMD") title=Some("FenceyMD")
 [snapshot-test] captured 2200x1640 (14432000 bytes RGBA)
 [snapshot-test] wrote /Users/.../target/snapshot-test-output.png
 [snapshot-test] clipboard set ok
@@ -116,7 +116,7 @@ Exit codes are explicit so you can tell which step failed:
 | Exit | Step | What to check |
 |---|---|---|
 | 1 | `xcap::Window::all()` | Window enumeration blocked; check macOS Screen Recording permission (shouldn't be needed for self-capture, but a strict MDM policy could block it) |
-| 2 | No MD Reader window | The filter (pid + app name) didn't match anything. Is the .app running with the correct bundle id (`com.mdreader.app`)? |
+| 2 | No FenceyMD window | The filter (pid + app name) didn't match anything. Is the .app running with the correct bundle id (`com.fenceymd.app`)? |
 | 3 | `capture_image()` | The window exists but capture failed. Often a permission or stale-window issue; try restarting the app |
 | 4 | Zero-dimension image | Should not happen; the OS reported a 0×0 window. Re-run after a few seconds |
 | 5 | PNG save | Output path is wrong or the disk is full. The harness writes to `target/snapshot-test-output.png` |

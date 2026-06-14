@@ -13,9 +13,16 @@
 import MiniSearch from 'minisearch';
 import { labelFromName } from './index.js';
 
+// Module-singleton index + doc store for the one open book. There is
+// at most one book open at a time, so a module-level singleton is the
+// simplest correct model; `buildSearchIndex` fully replaces both, and
+// `clearSearchIndex` tears them down. Callers must build before search.
 let _ms = null;
 let _docs = [];
 
+// Fenced code block: ```lang\n…``` . Capture group 1 is the fence body.
+// `g` flag means callers MUST reset `.lastIndex` before reuse (see
+// `extractFences`) — the regex object is shared across all calls.
 const FENCE_RE = /```[a-zA-Z0-9_-]*\n([\s\S]*?)```/g;
 
 /** Strip markdown chrome, keep readable text. Inline code, links, and
@@ -54,11 +61,16 @@ function stripMarkdownChrome(text) {
     .trim();
 }
 
+/** Chapter title for ranking/display: the first `# ` heading if present,
+ *  else a human label derived from the filename. Result is trimmed. */
 function extractTitle(content, name) {
   const m = content.match(/^#\s+(.+)$/m);
   return (m ? m[1] : labelFromName(name)).trim();
 }
 
+/** Concatenate every fenced code block's body (no fence markers) into one
+ *  string, blank-line separated. Indexed as its own field so code-only
+ *  terms are searchable but don't dominate prose relevance. */
 function extractFences(content) {
   const out = [];
   let m;
@@ -70,12 +82,23 @@ function extractFences(content) {
   return out.join('\n\n');
 }
 
+/** Map a `{ path, name, content }` chapter item to the indexed document
+ *  shape. `path` doubles as the stable `id` (one doc per chapter file).
+ *  `body` and `fenceText` are the search fields; the raw markdown is
+ *  intentionally not retained (callers re-derive snippets from `body`). */
 function toDoc(item) {
   const title = extractTitle(item.content, item.name);
   const body = stripMarkdownChrome(item.content);
   const fenceText = extractFences(item.content);
   return {
-    id: item.path,
+    // The search index needs unique IDs. The renderer's `path` is
+    // group-stripped (e.g. two top-level `README.md` files both
+    // have `path: 'README.md'`), which collides on MiniSearch's
+    // required unique-id constraint. `diskPath` is the full
+    // group-prefixed relative path from the scan, which is unique
+    // within a folder. We use it for the index id; the renderer
+    // keeps using the group-stripped `path` for routing.
+    id: item.diskPath || item.path,
     path: item.path,
     name: item.name,
     title,
@@ -107,9 +130,12 @@ export function clearSearchIndex() {
   _docs = [];
 }
 
-/** Look up the doc for a path (used by the snippet helper). */
+/** Look up the doc for a path. Accepts either the group-stripped
+ *  `path` (used by routing) or the full `diskPath` (used as the
+ *  search index id). We try `id` first, then `path`, so the
+ *  snippet helper works no matter which form the caller passes. */
 export function getDoc(path) {
-  return _docs.find((d) => d.path === path) || null;
+  return _docs.find((d) => d.id === path || d.path === path) || null;
 }
 
 /** Run a query, return ranked results. */

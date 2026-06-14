@@ -98,6 +98,10 @@ export function stampAnchors(area) {
   const counts = Object.create(null);
   const bump = (k) => (counts[k] = (counts[k] || 0) + 1);
   visit(area);
+  // Depth-first preorder visit. Returns nothing; side-effect is stamping.
+  // Three exits in priority order: already-stamped subtree (idempotency),
+  // a non-flow container (classify it, then stop descending), or a kind
+  // match (stamp + claim the subtree). Otherwise recurse into children.
   function visit(el) {
     if (!el || el.nodeType !== 1) return;
     // Idempotency: a stamped element claims its entire subtree.
@@ -117,6 +121,9 @@ export function stampAnchors(area) {
     // No kind match — recurse into children.
     for (const child of el.children) visit(child);
   }
+  // Stamp `el` with the first matching kind's anchor and return true; return
+  // false if no kind matches. KIND_SELECTORS order is the tiebreak when an
+  // element could match several kinds (most specific first — see its NOTE).
   function classifyAndStamp(el) {
     if (!el.matches) return false;
     for (const { kind, sel } of KIND_SELECTORS) {

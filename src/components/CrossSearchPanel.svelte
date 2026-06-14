@@ -1,4 +1,23 @@
 <script>
+  // CrossSearchPanel.svelte — book-wide full-text search overlay (⌘⇧F).
+  //
+  // Single responsibility: present the cross-chapter search modal — run the
+  // query against the MiniSearch index, render ranked results with snippets,
+  // and on selection route to the chapter while handing the Reader the query
+  // to re-highlight. It owns only transient panel state (cursor, results);
+  // the index lives in cross-search.js and the open/query/pending stores in
+  // stores/state.js.
+  //
+  // Collaborators:
+  //   • cross-search.js — runSearch / makeSnippet / getDoc (the index).
+  //   • stores — goChapter (routing), crossSearchOpen/Query (panel state),
+  //     pendingInChapterSearch (the hand-off to Reader).
+  //   • App.svelte — owns the global ⌘⇧F toggle (see note below).
+  //
+  // Invariants:
+  //   • Visible only when crossSearchOpen && ready (a book must be open).
+  //   • This component does NOT listen for ⌘⇧F — only Escape — to avoid
+  //     racing App's toggle (see the trailing comment / template note).
   import { tick } from 'svelte';
   import { runSearch, makeSnippet, getDoc } from '../lib/cross-search.js';
   import { goChapter } from '../lib/stores.js';
@@ -9,7 +28,10 @@
   let results = $state([]);
   let trimmed = $derived($crossSearchQuery.trim());
 
-  // Re-run the search whenever the query changes.
+  // Re-run the search whenever the query changes. Depends only on the query
+  // store; `results`/`cursor` are written here and never read, so this can't
+  // self-trigger. Resetting cursor to 0 keeps the highlight on a valid row
+  // after the result set changes out from under it.
   $effect(() => {
     const q = $crossSearchQuery;
     results = runSearch(q);
@@ -18,6 +40,8 @@
 
   // When the panel opens, focus the input + select-all so the user can
   // either type a new query or just hit Enter to jump the first hit.
+  // tick() waits for the {#if} to actually render the <input> before we
+  // grab inputEl — on the open frame the node doesn't exist yet.
   $effect(() => {
     if ($crossSearchOpen) {
       tick().then(() => {
@@ -26,11 +50,18 @@
     }
   });
 
+  /** Close the panel and clear the query so the next open starts blank. */
   function close() {
     crossSearchOpen.set(false);
     crossSearchQuery.set('');
   }
 
+  /**
+   * Navigate to the chapter behind result `idx` and close the panel.
+   * Out-of-range / stale indices are a safe no-op. Before closing we stash
+   * the current query in pendingInChapterSearch so the Reader can pre-fill
+   * its own in-chapter search and highlight the match on mount.
+   */
   function jumpToResult(idx) {
     const r = results[idx];
     if (!r) return;
@@ -42,6 +73,14 @@
     close();
   }
 
+  /**
+   * Keyboard handler bound to the search <input>.
+   *   Escape → close · Enter → jump to next hit · Shift+Enter → previous
+   *   ArrowUp/Down → move the cursor without jumping.
+   * Cursor math wraps around the result list (modulo length). Math.max(1, …)
+   * guards the arrow cases against a divide-by-zero when there are no
+   * results. Enter is a no-op on an empty result set.
+   */
   function onKey(e) {
     if (e.key === 'Escape') {
       e.preventDefault();

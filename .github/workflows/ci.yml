@@ -146,7 +146,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('MD Reader {0}', github.ref_name) || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Fenceymd {0}', github.ref_name) || '' }}
           releaseBody: |
             See [CHANGELOG](./CHANGELOG.md) for what changed.
             See [THIRD-PARTY-LICENSES](./THIRD-PARTY-LICENSES.md) for attributions.

@@ -478,7 +478,7 @@ if (panelOpen) {
 // ── 25. Settings panel shows the new options + Reset works ────────────────
 // (ROADMAP v1.1 #8 #9 #10 #11) Open Settings, confirm the new controls
 // exist, set a few prefs to non-default values, click Reset, and verify
-// every `md-reader-*` localStorage key is gone plus the UI is back to
+// every `fenceymd-*` localStorage key is gone plus the UI is back to
 // defaults.
 await page.evaluate(() => {
   const items = [...document.querySelectorAll('.sidebar-nav-item')];
@@ -503,9 +503,9 @@ if (!settingsOpen25) {
 
   // Set a few prefs to non-default values, then reset.
   await page.evaluate(() => {
-    localStorage.setItem('md-reader-font-family', 'mono');
-    localStorage.setItem('md-reader-code-theme', 'nord');
-    localStorage.setItem('md-reader-reopen-last', '0');
+    localStorage.setItem('fenceymd-font-family', 'mono');
+    localStorage.setItem('fenceymd-code-theme', 'nord');
+    localStorage.setItem('fenceymd-reopen-last', '0');
   });
   await page.click('[data-test="reset-prefs-btn"]');
   await new Promise(r => setTimeout(r, 250));
@@ -513,15 +513,15 @@ if (!settingsOpen25) {
     const keys = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith('md-reader-')) keys.push(k);
+      if (k && k.startsWith('fenceymd-')) keys.push(k);
     }
     return {
       keys,
       codeTheme: document.documentElement.getAttribute('data-code-theme'),
       fontFamily: document.documentElement.getAttribute('data-font-family'),
-      reopenLast: localStorage.getItem('md-reader-reopen-last'),
-      fontFamilyLs: localStorage.getItem('md-reader-font-family'),
-      codeThemeLs: localStorage.getItem('md-reader-code-theme'),
+      reopenLast: localStorage.getItem('fenceymd-reopen-last'),
+      fontFamilyLs: localStorage.getItem('fenceymd-font-family'),
+      codeThemeLs: localStorage.getItem('fenceymd-code-theme'),
     };
   });
   // After reset, the keys the test set should hold the DEFAULT values
@@ -556,7 +556,7 @@ const toggleBefore = await page.evaluate(() => {
   return {
     on: t?.classList.contains('on') ?? null,
     aria: t?.getAttribute('aria-checked') ?? null,
-    stored: localStorage.getItem('md-reader-reopen-last'),
+    stored: localStorage.getItem('fenceymd-reopen-last'),
   };
 });
 await page.click('[data-test="reopen-last-toggle"]');
@@ -566,7 +566,7 @@ const toggleAfterClick = await page.evaluate(() => {
   return {
     on: t?.classList.contains('on') ?? null,
     aria: t?.getAttribute('aria-checked') ?? null,
-    stored: localStorage.getItem('md-reader-reopen-last'),
+    stored: localStorage.getItem('fenceymd-reopen-last'),
   };
 });
 const toggled = toggleBefore.on !== toggleAfterClick.on
@@ -590,7 +590,7 @@ const toggleAfterReload = await page.evaluate(() => {
   return {
     on: t?.classList.contains('on') ?? null,
     aria: t?.getAttribute('aria-checked') ?? null,
-    stored: localStorage.getItem('md-reader-reopen-last'),
+    stored: localStorage.getItem('fenceymd-reopen-last'),
   };
 });
 const persisted = toggleAfterReload.on === (toggleAfterClick.stored === '1')

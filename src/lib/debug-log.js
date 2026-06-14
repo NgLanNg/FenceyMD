@@ -16,9 +16,16 @@
 
 import { TAURI, invoke } from './tauri.js';
 
+// Monotonic counter that disambiguates trace ids minted within the same
+// millisecond (the timestamp alone is not unique under tight loops).
 let _seq = 0;
 function nextId() { _seq += 1; return `t${Date.now().toString(36)}_${_seq}`; }
 
+/** Write one debug line. Accepts any mix of strings/objects; objects are
+ *  JSON-stringified (and fall back to String() if they have cycles), then all
+ *  parts are space-joined. Fire-and-forget: the Rust write is not awaited and
+ *  any failure is swallowed, so logging can never throw into the caller. In a
+ *  plain browser it logs to console only (see file header). */
 export function dlog(...parts) {
   const line = parts
     .map((p) => {
@@ -29,7 +36,7 @@ export function dlog(...parts) {
     .join(' ');
   if (!TAURI) {
     // eslint-disable-next-line no-console
-    console.log('[md-reader]', line);
+    console.log('[fenceymd]', line);
     return;
   }
   invoke('debug_log', { line }).catch(() => { /* swallow — best effort */ });

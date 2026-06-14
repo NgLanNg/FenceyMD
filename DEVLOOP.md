@@ -1,6 +1,6 @@
 # Dev Loop — how changes get made & verified
 
-This is the working loop used to build MD Reader: how a request becomes a
+This is the working loop used to build FenceyMD: how a request becomes a
 verified, shippable build. It favors a **tight feedback loop** (fast browser
 checks) and **verify-before-ship** (nothing is called done until it's observed
 working), because the app spans three layers — Svelte UI, Rust/Tauri backend,
@@ -40,8 +40,10 @@ runtime.
 - **Key constraint — the macOS WKWebView is not a full browser.** It can't:
   download via `<a download>`, write images to the clipboard, or run AppImage
   tools. Anything binary/native goes through a Rust command (`save_export`,
-  `copy_image`) exposed via `src/lib/tauri.js`. PDF export uses the OS print
-  dialog (`window.print()`), not canvas rasterization, so text stays vector.
+  `copy_image`) exposed via `src/lib/tauri.js`. PDF export hands the rendered
+  chapter HTML to the Rust `print_pdf` command, which renders it with headless
+  Chrome (`--print-to-pdf`) into a self-contained, always-light document — so
+  text stays crisp vector. (Not `window.print()`, and not canvas rasterization.)
 
 ## ③ Build the frontend
 
@@ -106,9 +108,9 @@ If the `.app` got consumed, mount the produced `.dmg` and launch from there.
 ## ⑦ Confirm — observe it actually runs
 
 ```bash
-open "src-tauri/target/release/bundle/macos/MD Reader.app"
+open "src-tauri/target/release/bundle/macos/FenceyMD.app"
 # confirm the process is alive AND a window exists (init can lag a few seconds):
-osascript -e 'tell application "System Events" to tell process "md-reader" to count windows'
+osascript -e 'tell application "System Events" to tell process "fenceymd" to count windows'
 ```
 "Builds" ≠ "works." Confirm the real app launches with a window before reporting
 done. Native dialogs (Save-as-PDF, file rename/open) can't be auto-clicked from

@@ -1,7 +1,7 @@
 [package]
-name = "md-reader"
+name = "fenceymd"
 version = "1.0.0"
-description = "A local Markdown book reader"
+description = "A local, AI-native reader for the Markdown docs you actually read"
 authors = ["Alan Nguyen"]
 license = "MIT"
 edition = "2021"
@@ -24,6 +24,29 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # self-capture). On macOS this goes through CGWindowListCreateImage;
 # on Linux via X11/Wayland; on Windows via DXGI.
 xcap = "0.9"
+# MCP server (ROADMAP integration: AI agent control of FenceyMD).
+# `axum` 0.7 with the `macros` feature so the tool-dispatch router
+# can be written as a function. `tower` for service glue. The HTTP
+# server runs on a random localhost port and is the only public IPC
+# surface for agents.
+#
+# Direct dep on tokio. Tauri's runtime pulls it in transitively but
+# we need the `net` feature for TcpListener + the `macros` feature
+# for `#[tokio::test]`. Pin to ^1 to match the version Tauri 2 ships.
+#
+# `uuid` for `Uuid::new_v4()` if we ever need request IDs (we don't,
+# yet). `base64` is for the `capture_screenshot` tool, which returns
+# PNG bytes base64-encoded so the agent can pass the image to a
+# vision LLM.
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["net", "macros", "rt", "rt-multi-thread", "sync", "time"] }
+tower = "0.5"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+# Edit Codex's `config.toml` in place when registering FenceyMD as an MCP
+# server, preserving the user's existing comments/formatting/sibling servers.
+# Only the Codex agent path needs TOML; every other agent config is JSON.
+toml_edit = "0.22"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }

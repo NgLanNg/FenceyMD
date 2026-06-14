@@ -1,4 +1,4 @@
-# MD Reader — Design Specification
+# FenceyMD — Design Specification
 
 > A calm, local-first desktop app for reading and editing folders of Markdown
 > as if they were books. Built with Svelte 5 + Tauri 2. Editorial typography,
@@ -8,7 +8,7 @@
 
 ## 1. Product Overview
 
-**What it is.** MD Reader turns any folder of `.md` files into a navigable book:
+**What it is.** FenceyMD turns any folder of `.md` files into a navigable book:
 files become chapters, subfolders become parts/groups, and the app remembers
 where you stopped reading. It renders rich Markdown (tables, code, mermaid
 diagrams, inline SVG, math) and offers an inline WYSIWYG editor for quick edits.
@@ -70,7 +70,7 @@ color — not a developer tool.
 | `--tertiary-dim` | `rgba(224,108,90,0.12)` |
 
 Theme is toggled via the sidebar footer and persisted to `localStorage`
-(`md-reader-theme`). Applied as `data-theme` on `<html>`.
+(`fenceymd-theme`). Applied as `data-theme` on `<html>`.
 
 ### 3.3 Typography
 
@@ -141,7 +141,7 @@ Routing is store-driven: `route = { name: 'home' | 'group' | 'chapter', … }`.
 
 **Purpose:** entry point when no folder is loaded.
 
-- Centered column: title **“MD Reader”** (serif, 2rem), one-line description
+- Centered column: title **“FenceyMD”** (serif, 2rem), one-line description
   (serif, muted), primary **Open Folder** button (ink fill, sans).
 - **Recent folders** list below: each row = 📁 icon · folder name · dim path · ✕
   remove button. Missing folders show “(missing)”, dimmed to 50%, non-clickable.

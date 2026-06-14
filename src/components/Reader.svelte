@@ -1,6 +1,40 @@
 <script>
+  // ─────────────────────────────────────────────────────────────────────────
+  // Reader.svelte — the chapter reading surface.
+  //
+  // Single responsibility: render ONE markdown chapter (resolved from `path`
+  // against the `folderMeta` store) as an editorial article, plus the toolbar,
+  // keyboard shortcuts, in-chapter find, reading-progress tracking, slide-view
+  // toggle, PDF export, window snapshot, rename, and the inline WYSIWYG editor.
+  //
+  // Collaborators:
+  //   • stores.js / stores/* — the source of truth for folder contents,
+  //     per-chapter progress, theme/font/width prefs, and view mode. This
+  //     component is a reactive *view* over those stores; it owns no chapter
+  //     data of its own (only transient UI: search text, busy flags, dialogs).
+  //   • markdown.js (renderMarkdown/enhance) — text → trusted HTML, then async
+  //     enhancement (mermaid, Excalidraw, code highlighting) of the live DOM.
+  //   • link-resolver.js — maps clicked in-chapter <a> hrefs to chapter paths.
+  //   • Editor.svelte — replaces the whole reader while `editing` is true.
+  //   • tauri.js — the Rust bridge for PDF export, save dialogs, and snapshots.
+  //
+  // Key invariants / assumptions a maintainer MUST keep in mind:
+  //   • `bodyHtml` is fed to {@html}. It is the OUTPUT of renderMarkdown, which
+  //     is the project's sanitization boundary — do NOT route any other,
+  //     un-rendered string into {@html} here.
+  //   • Path identity: `path` is GROUP-STRIPPED (display/navigation key);
+  //     `item.diskPath` is the FULL on-disk path. Use diskPath for progress
+  //     keys and link resolution, path for navigation. Mixing them silently
+  //     mis-keys progress and breaks `../` link math.
+  //   • Editor ↔ chapter binding: the mounted Editor is bound to the CURRENT
+  //     `item`. The two effects below (path-change and html-change) exist to
+  //     force-close the editor before that binding can write old text into a
+  //     newly-navigated chapter. See their comments — the $effect dependency
+  //     sets are load-bearing and several values are deliberately NOT tracked.
+  // ─────────────────────────────────────────────────────────────────────────
   import { tick } from 'svelte';
-  import { TAURI, saveBytes, printPDF, snapshotApp } from '../lib/tauri.js';
+  import { get } from 'svelte/store';
+  import { TAURI, saveBytes, printPDF, snapshotApp, mcpUpdateViewState } from '../lib/tauri.js';
   import { renderMarkdown, enhance } from '../lib/markdown.js';
   import { labelFromName } from '../lib/index.js';
   import {
@@ -11,13 +45,16 @@
   } from '../lib/stores.js';
   import OutlinePane from './OutlinePane.svelte';
   import { pendingInChapterSearch } from '../lib/stores/state.js';
-  import { chapterScrollFrac, lastSavedAt } from '../lib/stores/progress.js';
+  import { chapterScrollFrac, selfSaveSeq } from '../lib/stores/progress.js';
   import { hasMultipleSlides } from '../lib/slides.js';
   import { resolveChapterLink } from '../lib/link-resolver.js';
   import Editor from './Editor.svelte';
   import SlideViewer from './SlideViewer.svelte';
   import ZoomOverlay from './ZoomOverlay.svelte';
   import { dlog } from '../lib/debug-log.js';
+  // Props: `path` — group-stripped chapter key to render (see header note on
+  // path vs diskPath). `isMobile` — toggles the mobile nav-drawer behavior in
+  // showNav() and a few responsive class hooks.
   let { path, isMobile = false } = $props();
 
   // Editing requires the Tauri backend to save. In dev/browser ?test=1 mode we
@@ -36,20 +73,33 @@
   let renameError = $state('');
   let renameBusy = $state(false);
 
+  // `use:focusOnMount` action — focus + select the rename input the instant it
+  // mounts so the user can type the new name without a click. No teardown
+  // needed (the node unmounts with the dialog).
   function focusOnMount(node) {
     node.focus();
     node.select();
   }
 
+  // Reveal the navigation sidebar. The two stores model different things:
+  // on mobile the nav is an overlay drawer (navOpen); on desktop it's a
+  // collapsible rail (navCollapsed).
   function showNav() {
     if (isMobile) navOpen.set(true);
     else navCollapsed.set(false);
   }
+  // Open the rename dialog, seeding the input with the current name minus its
+  // .md extension (re-added on save) so the user edits only the base name.
   function startRename() {
     renameValue = (item?.name || '').replace(/\.md$/i, '');
     renameError = '';
     renaming = true;
   }
+  // Commit the rename via the renameFile store action (which renames on disk
+  // and updates folderMeta). Guards against empty names and double-submits.
+  // On success we navigate to the returned newPath because the old `path`
+  // prop no longer resolves to any item. On failure we surface a cleaned-up
+  // message inline and leave the dialog open for a retry.
   async function confirmRename() {
     const name = renameValue.trim();
     if (!name || renameBusy) return;
@@ -65,6 +115,11 @@
     }
   }
 
+  // Core reactive chain: item → text → html → bodyHtml. Everything below
+  // (siblings, bookmark state, slide capability, header metadata) hangs off
+  // these. `item` may be undefined transiently (e.g. mid-rename or before the
+  // folder loads), so every reader uses optional chaining and falls back to
+  // `path`.
   const item = $derived($folderMeta.find((f) => f.path === path));
   const text = $derived(
     item?.content != null
@@ -76,6 +131,10 @@
   const bodyHtml = $derived(html.replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>/i, ''));
   const sib = $derived(siblingsOf(path));
   const bookmarked = $derived(!!$progressMap[item?.diskPath || path]?.bookmarked);
+  // Slide view is only offered when the chapter has `---` slide breaks; the
+  // toggle stays in 'slide' mode globally but we render slides only when the
+  // CURRENT chapter is capable, so navigating to a break-less chapter falls
+  // back to reading without resetting the user's preference.
   const slideCapable = $derived(hasMultipleSlides(text));
   const inSlideMode = $derived($viewMode === 'slide' && slideCapable);
   function exitSlide() { viewMode.set('read'); }
@@ -86,6 +145,11 @@
   // spans) before counting, so a chapter with 200 lines of ```js
   // doesn't inflate the "words" number. Then `ceil(words / 220)`
   // gives a Vim-style "5 min" reading time.
+  //
+  // @param s   raw markdown source
+  // @returns   plain-ish prose: a best-effort strip of markdown chrome, NOT a
+  //            parse — it's only ever fed to a word count, so the odd missed
+  //            token is harmless. Do not reuse for anything that needs fidelity.
   function stripMarkdown(s) {
     return s
       .replace(/```[\s\S]*?```/g, ' ')
@@ -130,23 +194,39 @@
     return () => window.removeEventListener('resize', onResize);
   });
 
-  // Re-enhance + restore scroll whenever the chapter (or its html) changes.
-  // Close the editor whenever the chapter's rendered HTML changes from an
-  // EXTERNAL source (file watcher, etc.). Autosave's own save() also updates
-  // folderMeta → html, but the editor should stay open in that case. We
-  // detect "save vs external" by checking $lastSavedAt: if a save happened
-  // in the last few hundred ms, this html change is from our own save
-  // (and the editor's `save({ silent: true })` path already handled the
-  // close-or-not decision). Otherwise, it's an external change and we close
-  // the editor so the user sees the fresh content.
-  //
-  // IMPORTANT: must NOT read `editing` here — that would make Svelte track it, causing
-  // the effect to re-run when editing=true and immediately reset it to false.
+  // Close the editor on actual chapter navigation. This is deliberately
+  // separate from the html-change effect below: a `path` change means the user
+  // navigated to a different chapter, so the editor MUST close regardless of
+  // recent-save timing. Otherwise the still-mounted editor (showing the old
+  // chapter's text) is now bound to the NEW chapter's `item` — and its next
+  // save would write the old content into the new file (data corruption). We
+  // track the previous path in a plain, untracked local and read only `path`
+  // reactively here — never `editing` (that re-introduces the edit-loop).
+  let _prevEditPath = path;
   $effect(() => {
-    html; // track only html — do not read mdEl or editing here
-    const lastSave = $lastSavedAt;
-    if (lastSave && (Date.now() - lastSave) < 500) return; // our own autosave; editor stays open
-    editing = false;
+    if (path !== _prevEditPath) {
+      _prevEditPath = path;
+      editing = false;
+    }
+  });
+
+  // Close the editor whenever the chapter's rendered HTML changes from an
+  // EXTERNAL source (file watcher, etc.). The editor's own save() also updates
+  // folderMeta → html, but the editor should stay open in that case. We tell
+  // the two apart with `selfSaveSeq`: the editor bumps it just before each
+  // save, so if it advanced since we last observed it, this html change is our
+  // own save (keep editing); otherwise it's external (close). This replaces a
+  // `Date.now() - lastSavedAt < 500ms` window that closed the editor mid-edit
+  // when a slow save's folderMeta update landed after the window.
+  //
+  // IMPORTANT: must NOT read `editing` here — that would make Svelte track it,
+  // causing the effect to re-run when editing=true and immediately reset it.
+  let _seenSaveSeq = get(selfSaveSeq);
+  $effect(() => {
+    html;                     // track content changes
+    const seq = $selfSaveSeq; // track our-own-save signal
+    if (seq !== _seenSaveSeq) { _seenSaveSeq = seq; return; } // our save → keep open
+    editing = false;          // external change → close
   });
 
   // Enhance + restore scroll whenever the chapter element is available (first mount,
@@ -177,6 +257,14 @@
     return () => window.removeEventListener('scroll', onScroll);
   });
 
+  // Recompute the scroll fraction and fan it out three ways: the top progress
+  // bar (local state), the sidebar dot (chapterScrollFrac store), and the
+  // persisted per-chapter position (saveProgress, debounced internally).
+  // Called on scroll and once after each enhance/restore settles.
+  //
+  // Skips persistence while `editing` so an editor-driven layout shift doesn't
+  // clobber the saved reading position, and keys on diskPath||path so the
+  // saved position matches the rest of the app (see header note).
   function updateProgress() {
     const docH = document.documentElement.scrollHeight - window.innerHeight;
     const frac = docH > 0 ? window.scrollY / docH : 0;
@@ -185,15 +273,41 @@
     // store so the progress dot in the chapter list can render in
     // real time. Capped to [0, 1] in case of rounding overshoot.
     chapterScrollFrac.set(Math.max(0, Math.min(1, frac)));
+    // ROADMAP integration: also push the scroll fraction to the MCP
+    // server so agents calling `get_current_chapter` see a recent
+    // position. The Rust side stores the latest snapshot. Best-
+    // effort — if the MCP server is down, the call swallows.
+    mcpUpdateViewState({ scroll_position: frac });
     if (!editing && item) {
       const pr = progressFor(item.diskPath || item.path);
       saveProgress(item.diskPath || item.path, frac, pr.bookmarked);
     }
   }
 
+  // ROADMAP integration: push the current chapter path to the MCP
+  // server whenever the route changes. The Rust side stores the
+  // latest snapshot so `get_current_chapter` doesn't have to ask
+  // the WebView. Runs on every navigation, including the one
+  // triggered by an agent's `open_file` call (so the cycle is
+  // self-consistent: navigate → push state → agent queries → answers).
+  $effect(() => {
+    mcpUpdateViewState({
+      route_name: 'chapter',
+      current_chapter_path: path,
+    });
+  });
+
+  // Toolbar back button: return to this chapter's group view, or the library
+  // home if the chapter has no enclosing group.
   function back() { sib.group ? goGroup(sib.group) : goHome(); }
 
   // In-chapter search (highlight + scroll to first match).
+  //
+  // Operates directly on the live rendered DOM (mdEl), not the markdown: it
+  // first UNWRAPS any prior `.search-highlight` spans (restoring + normalizing
+  // the original text nodes) so repeated searches don't nest/compound markup,
+  // then re-walks text nodes and wraps fresh matches. Idempotent for a given
+  // query. Skips script/style/input text and text already inside a highlight.
   function runSearch() {
     if (!mdEl) return;
     mdEl.querySelectorAll('.search-highlight').forEach((el) => {
@@ -211,6 +325,11 @@
     nodes.forEach((node) => {
       if (node.parentElement.closest('.search-highlight')) return;
       if (['SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT'].includes(node.parentElement.tagName)) return;
+      // `regex` has the /g flag, so `.test()` advances `lastIndex`. Without
+      // resetting it, a match in one node leaves lastIndex non-zero and the
+      // next node's `.test()` resumes mid-string — silently skipping matches
+      // near the start of subsequent nodes. Reset before each membership test.
+      regex.lastIndex = 0;
       if (regex.test(node.textContent)) {
         const span = document.createElement('span');
         span.innerHTML = node.textContent.replace(regex, '<mark class="search-highlight">$1</mark>');
@@ -259,20 +378,29 @@
     goChapter(resolved);
   }
 
+  // Copy a deep link to this chapter to the clipboard. The `?load=` param is
+  // the same one the app reads on startup to jump straight to a chapter.
   function copyLink() {
     const url = location.origin + location.pathname + '?load=' + encodeURIComponent(path);
     navigator.clipboard.writeText(url);
   }
 
-  // Export the current chapter as a PDF.
-  //   • Desktop (Tauri): render with html2pdf.js (lazy-loaded), hand the bytes
-  //     to the Rust `save_export` command, which pops a native Save dialog.
-  //     Works regardless of the host OS's print-to-PDF support.
-  // Export the current chapter as a PDF via the OS print dialog.
+  // Export the current chapter as a PDF (Tauri only).
   //
-  // We show a visible toast so the user knows the print panel is
-  // opening (Tauri WKWebView can hide it behind the app window).
-  // The user picks "Save as PDF" in the print panel to save.
+  // Pipeline: wait for async blocks (mermaid SVGs, Excalidraw → SVG) to settle,
+  // snapshot the live rendered HTML + the resolved theme CSS vars, then hand
+  // both to the Rust `print_pdf` command. Rust builds a self-contained, always-
+  // light print document (see build_print_html) and renders it with headless
+  // Chrome (`--print-to-pdf`), so the text stays crisp vector. The resulting
+  // bytes go to `save_export`, which pops a native Save dialog. (NOT html2pdf.js
+  // and NOT window.print() — both were earlier approaches, since replaced.)
+  //
+  // We show a visible toast so the user knows export is in progress.
+  // A single, reusable imperative toast (not Svelte-managed) shared by the PDF
+  // and snapshot flows. show replaces any in-flight toast (so progress → result
+  // messages don't stack); hide removes it. Imperative because these run inside
+  // long async pipelines where we want immediate, render-cycle-independent
+  // feedback. `textContent` (not innerHTML) keeps untrusted error strings inert.
   let pdfToast;
   function showPdfToast(msg) {
     if (pdfToast) pdfToast.remove();
@@ -314,6 +442,12 @@
     }
   }
 
+  // Export the current chapter to PDF. No-op outside Tauri (no Rust bridge) and
+  // re-entrancy-guarded via pdfBusy (the toolbar button is also `disabled`).
+  // Long-running: settles async diagrams, mutates a CLONE for the dark→light
+  // mermaid relight (never the live DOM), snapshots theme vars, then defers to
+  // Rust. All failures are caught and surfaced as a toast; the function never
+  // throws to its caller.
   async function exportPDF() {
     if (pdfBusy || !TAURI) return;
     pdfBusy = true;
@@ -375,7 +509,19 @@
       }
 
       // Pull the live rendered HTML (mermaid SVGs + Excalidraw SVGs now in place).
-      const liveHtml = mdEl ? mdEl.innerHTML : bodyHtml;
+      // For PDF we want to clone the chapter so we can relight mermaid
+      // (CODE-REVIEW P1.3) without flashing the live DOM. The clone is
+      // only used to read .innerHTML after the relight — it's not
+      // attached to the document.
+      let liveHtml = bodyHtml;
+      if (mdEl) {
+        const clone = mdEl.cloneNode(true);
+        if ($theme === 'dark') {
+          const { relightMermaidForPdf } = await import('../lib/renderers/mermaid.js');
+          await relightMermaidForPdf(clone);
+        }
+        liveHtml = clone.innerHTML;
+      }
 
       // Snapshot the computed CSS variables the chapter relies on (theme + fonts).
       // This way the PDF matches the on-screen rendering exactly, no matter the
@@ -395,7 +541,7 @@
         vars[name] = cs.getPropertyValue(name).trim();
       }
 
-      const pdfBytes = await printPDF(mdTitle, liveHtml, $theme === 'dark', vars);
+      const pdfBytes = await printPDF(mdTitle, liveHtml, vars);
       if (pdfBytes) {
         const safeName = (item?.name || 'chapter').replace(/\.md$/i, '') + '.pdf';
         const saved = await saveBytes(safeName, new Uint8Array(pdfBytes));
@@ -427,6 +573,10 @@
   // so the SlideViewer's handler is the only one that fires.
   let showCheatsheet = $state(false);
   let lastGAt = 0;
+  // Global keydown handler (bound via <svelte:window>). Bails early in three
+  // cases — typing in a field, editor open, or slide mode (see block comment) —
+  // before any shortcut fires, so reader shortcuts can never hijack text entry
+  // or fight the SlideViewer for the arrow keys.
   function onKey(e) {
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
@@ -458,6 +608,13 @@
     else if (e.shiftKey && (e.metaKey || e.ctrlKey) && (e.key === 'S' || e.key === 's')) {
       e.preventDefault();
       takeSnapshot();
+    }
+    // ⌘P / Ctrl+P — export the chapter as a PDF (the cheatsheet documents
+    // this). We intercept so the OS print dialog doesn't open instead;
+    // exportPDF() is a no-op outside Tauri.
+    else if (!e.shiftKey && (e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+      e.preventDefault();
+      exportPDF();
     }
     else if (e.key === 'g' || e.key === 'G') {
       const now = performance.now();
@@ -523,7 +680,7 @@
           <span class="font-size-indicator">{fontSizeLabels[$fontSize] ?? 'M'}</span>
           <button class="tool-btn" onclick={() => adjustFontSize(1)} title="Increase font size">A+</button>
         </div>
-        <div class="reader2-tool-group hide-on-phone">
+        <div class="reader2-tool-group reader2-hide-narrow">
           <button class="tool-btn" onclick={() => adjustContentWidth(-50)} title="Narrower">W−</button>
           <button class="tool-btn" onclick={() => adjustContentWidth(50)} title="Wider">W+</button>
         </div>

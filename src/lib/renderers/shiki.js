@@ -29,11 +29,26 @@
 // round-trip), which is wrong.
 import { register, wrapWithCopyButton } from '../registry.js';
 
+// Module-level singletons shared across every call. `_shiki` is the
+// resolved highlighter; `_shikiReady` is its in-flight promise (so
+// concurrent callers await the same import, not N parallel ones).
+// `_codeTheme` / `_dark` are the live theme state the retheme exports
+// read — kept at module scope so the registry's per-block `render()`
+// and the standalone theme-switch exports all see one source of truth.
 let _shiki = null;
 let _shikiReady = null;
 let _codeTheme = 'github';
 let _dark = false;
 
+/**
+ * Lazily create (and memoize) the shiki highlighter with our bundled
+ * theme + language set. The first caller kicks off the dynamic import;
+ * every later caller — and any concurrent caller racing the first —
+ * awaits the same `_shikiReady` promise so we only build one highlighter.
+ *
+ * @returns {Promise<{ shiki: object, highlighter: object }>} the shiki
+ *   module plus the configured highlighter instance.
+ */
 async function getShiki() {
   if (_shiki) return _shiki;
   if (!_shikiReady) {
@@ -70,6 +85,11 @@ async function getShiki() {
 // 'nord' path we still register it as a single-entry record so the
 // produced HTML uses nord's colors and the CSS rule for
 // [data-code-theme="nord"] controls the wrapper background.
+//
+// @param {string}  codeTheme — active code theme ('github' | 'nord').
+// @param {boolean} dark      — app dark mode; only consulted on the
+//                              github path (nord is always dark).
+// @returns {{ themes: object, defaultColor: string }} shiki options.
 function pickThemes(codeTheme, dark) {
   if (codeTheme === 'nord') {
     // Single dark theme — shiki emits one color per span and uses
@@ -82,6 +102,16 @@ function pickThemes(codeTheme, dark) {
   return { themes: { light: 'github-light', dark: 'github-dark' }, defaultColor: dark ? 'dark' : 'light' };
 }
 
+/**
+ * Resolve the shiki grammar name from a `<code>` element's
+ * `language-X` class. Falls back to 'text' when the class is absent or
+ * names a grammar we didn't bundle in `getShiki()` — shiki throws on an
+ * unknown lang, so we never pass one through.
+ *
+ * @param {Element} codeEl      — the original `<code>` node.
+ * @param {object}  highlighter — the shiki highlighter (for its loaded-lang list).
+ * @returns {string} a grammar name guaranteed to be loaded, or 'text'.
+ */
 function pickLang(codeEl, highlighter) {
   const cls = [...codeEl.classList].find((c) => c.startsWith('language-'));
   if (!cls) return 'text';
@@ -89,6 +119,15 @@ function pickLang(codeEl, highlighter) {
   return highlighter.getLoadedLanguages().includes(lang) ? lang : 'text';
 }
 
+/**
+ * True when a `<code>` block is a diagram/visual language that shiki
+ * must NOT highlight (mermaid/svg/html/excalidraw have their own
+ * renderers). Used to exclude these from the highlight sweep so we
+ * don't clobber a diagram source with syntax-colored text.
+ *
+ * @param {Element} codeEl — the `<code>` node to classify.
+ * @returns {boolean}
+ */
 function isDiagramLang(codeEl) {
   return codeEl.classList.contains('language-mermaid')
       || codeEl.classList.contains('language-svg')
@@ -96,8 +135,32 @@ function isDiagramLang(codeEl) {
       || codeEl.classList.contains('language-excalidraw');
 }
 
+// Per-pre dedupe set (see the file header's "Idempotency" note). A
+// WeakSet so entries vanish when the DOM node is GC'd after chapter
+// navigation — no manual cleanup, no leak across chapters.
 const _donePres = new WeakSet();
 
+/**
+ * Highlight every eligible `<pre><code>` inside `area`, replacing each
+ * with a shiki-rendered `.shiki-block` wrapped in a copy button.
+ *
+ * Eligibility skips diagram langs, blocks already inside a rendered
+ * shiki/diagram pre, and pres recorded in `_donePres` — so a second
+ * call on the same area is a no-op (the registry may dispatch us more
+ * than once per chapter).
+ *
+ * @param {Element} area — chapter root to scan.
+ * @param {boolean} dark — app dark mode, forwarded to `pickThemes()`.
+ * @returns {Promise<void>}
+ *
+ * Gotchas:
+ *   - Reads the live module `_codeTheme`, not a param, so a theme set
+ *     between dispatch and render is honored.
+ *   - Per-block failures are swallowed to console.warn; one bad fence
+ *     never aborts the rest of the chapter.
+ *   - Stashes the original source on `data-source` so a later theme
+ *     switch can re-render without reloading the chapter.
+ */
 async function highlightIn(area, dark) {
   const { highlighter } = await getShiki();
   const codeEls = [...area.querySelectorAll('pre code')].filter(
@@ -153,6 +216,10 @@ async function highlightIn(area, dark) {
 // Restore a shiki-rendered block back to its original `<pre><code>…</code></pre>`
 // shape so `highlightIn` can re-render it. No-op if the block wasn't carrying
 // a `data-source` (defensive — we only stash it on blocks we own).
+//
+// @param {Element} area — chapter root whose shiki blocks to revert.
+// The paired step before a re-highlight: it also drops each reverted
+// pre from `_donePres` so the subsequent `highlightIn` doesn't skip it.
 function restoreShikiBlocks(area) {
   const rendered = area.querySelectorAll('pre.shiki, pre.shiki-block');
   for (const pre of rendered) {
@@ -180,6 +247,11 @@ function restoreShikiBlocks(area) {
   }
 }
 
+// Registry manifest entry. `defaultFor: 'code'` makes this the fallback
+// for any unknown fence lang (see registry resolve()), so ```js/```ts/…
+// all route here. `load()` warms the highlighter; `render()` ignores the
+// per-block args and instead sweeps the whole `ctx.area` once (highlightIn
+// is idempotent, so the registry dispatching us per-block is harmless).
 register('shiki', {
   kind: 'fence',
   defaultFor: 'code',
@@ -194,6 +266,10 @@ register('shiki', {
 
 // Exposed for the reader's enhance() so the test/import shape stays
 // the same as Phase 1.
+//
+// @param {Element} area — chapter root to highlight.
+// @param {boolean} dark — app dark mode.
+// @returns {Promise<void>} — thin pass-through to `highlightIn`.
 export async function highlightCodeBlocks(area, dark) {
   return highlightIn(area, dark);
 }
@@ -202,6 +278,10 @@ export async function highlightCodeBlocks(area, dark) {
 // block visible right now by restoring + re-highlighting in place. No-op
 // when the theme is the same as the current value (avoids pointless
 // work on hot reloads / initial mount).
+//
+// @param {string} themeName — new code theme ('github' | 'nord').
+// Safe to call in non-DOM (SSR/test) contexts: it updates the module
+// state and returns early when `document` is absent.
 export function setCodeTheme(themeName) {
   if (themeName === _codeTheme) return;
   _codeTheme = themeName;
@@ -216,7 +296,7 @@ export function setCodeTheme(themeName) {
 // NEW dark/light value. Called from the theme subscribe so that switching
 // light → dark (or vice versa) emits the dark/light inline color pair
 // instead of leaving the previously-rendered single color in place.
-// `dark` is the new app theme.
+// `dark` is the new app theme. No-op outside a DOM context.
 export function rethemeForDarkMode(dark) {
   _dark = !!dark;
   if (typeof document === 'undefined') return;
@@ -228,7 +308,8 @@ export function rethemeForDarkMode(dark) {
 
 // Initialize from the data-attribute set by the prefs store. This is
 // what lets a fresh page load pick up the persisted value before the
-// first render runs.
+// first render runs. Runs once at module load (call below). No-op when
+// there's no `document` (SSR/test import).
 function readInitialCodeTheme() {
   if (typeof document === 'undefined') return;
   const v = document.documentElement.getAttribute('data-code-theme');

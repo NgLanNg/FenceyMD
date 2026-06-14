@@ -1,4 +1,4 @@
-# MD Reader
+# FenceyMD
 
 > A native desktop Markdown book reader.
 > Smaller than Obsidian. Lighter than a notebook.
@@ -8,10 +8,10 @@
 
 ---
 
-## Why MD Reader
+## Why FenceyMD
 
 LLMs hand you one of two things: a wall of markdown, or a sea of HTML.
-Most readers pick one and stop. MD Reader picks **neither**. Render
+Most readers pick one and stop. FenceyMD picks **neither**. Render
 markdown, HTML, and embedded widgets side by side, in a single native
 desktop app.
 
@@ -69,6 +69,18 @@ editing.
   Remembered across sessions.
 - **Keyboard.** ← / → between chapters. ⌘F in-chapter search.
   ⌘P PDF export. e to edit. Esc to clear.
+- **AI-agent control (MCP).** A local MCP server (JSON-RPC over
+  HTTP, bound to `127.0.0.1`) exposes the same five things the
+  UI can do — `open_file`, `get_current_chapter`,
+  `get_chapter_content`, `get_selected_text`, `get_book_toc` —
+  to any agent that speaks MCP. Stdio-only agents connect via the
+  app's own `--mcp-bridge` subcommand (native, no Node), which
+  discovers the port on each connection so the config survives
+  restarts; HTTP-native agents (Antigravity, OpenCode, Gemini CLI)
+  can point directly at `http://127.0.0.1:PORT/mcp`. Writes stay
+  inside the folder; path-traversal is rejected in Rust. See
+  [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md) and
+  chapter 13 of the bundled demo for the full tour.
 
 ---
 
@@ -77,13 +89,13 @@ editing.
 ### macOS
 
 Grab `MD.Reader_1.0.0_aarch64.dmg` from the
-[Releases page](https://github.com/NgLanNg/mdreader/releases/latest),
-open the DMG, drag **MD Reader** into Applications.
+[Releases page](https://github.com/NgLanNg/fenceymd/releases/latest),
+open the DMG, drag **FenceyMD** into Applications.
 
 > **Note:** the release DMG is not code-signed. On first launch
 > macOS warns it's from an unidentified developer. Right-click the
 > app → **Open**, or run
-> `xattr -dr com.apple.quarantine "/Applications/MD Reader.app"`.
+> `xattr -dr com.apple.quarantine "/Applications/FenceyMD.app"`.
 
 For an **x86_64 (Intel) Mac**, **Windows**, or **Linux** build,
 see [CONTRIBUTING.md](CONTRIBUTING.md) for the build path on each OS.
@@ -93,8 +105,8 @@ see [CONTRIBUTING.md](CONTRIBUTING.md) for the build path on each OS.
 Requires **Node.js 18+** and **Rust** (https://rustup.rs).
 
 ```bash
-git clone https://github.com/NgLanNg/mdreader.git
-cd mdreader
+git clone https://github.com/NgLanNg/fenceymd.git
+cd fenceymd
 npm install
 npm run dev          # browser preview at http://localhost:1420
                      # append ?test=1 for the bundled tour book
@@ -126,8 +138,20 @@ npm run build:desktop   # → .app + .dmg (mac) / .msi + .exe (win) / .deb + .Ap
    the current chapter with vector text.
 7. **Preferences.** Gear icon (top-right). Theme, font, width,
    sidebar collapse. All remembered.
+8. **Drive it from an agent.** The MCP server starts the moment
+   the app does. The easiest way to connect an agent is
+   **Settings → AI agent control**: a per-agent toggle registers
+   FenceyMD into that agent's MCP config (Claude Code, Gemini,
+   OpenCode, Codex), pointing it at the native `--mcp-bridge`
+   subcommand — no Node, no manual port edits. The random port is
+   published to a `port` file in the app-data dir
+   (`~/Library/Application Support/com.fenceymd.app/port` on macOS)
+   and rediscovered on each connection, so the config survives
+   restarts. See [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md)
+   for manual setup, and the bundled chapter
+   [13 — Agent Control](demo/13-agent-control.md) for the tour.
 
-The bundled [`demo/`](demo/) is a 13-chapter self-introducing
+The bundled [`demo/`](demo/) is a 14-chapter self-introducing
 tour of every feature. Load it with `?test=1`.
 
 ---
@@ -142,17 +166,28 @@ tour of every feature. Load it with `?test=1`.
   recipes for common failures.
 - [`DEVLOOP.md`](DEVLOOP.md) — the working loop for changes (build,
   e2e, cargo, bundle, confirm).
+- [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md) —
+  per-agent MCP config snippets (Claude Code, Antigravity,
+  OpenCode, Gemini CLI, Codex). Required reading before plugging
+  the app into an agent.
 - [`ROADMAP.md`](ROADMAP.md) — what's next (v1.1, v2).
 
 ---
 
 ## Roadmap
 
-**WIP: AI-agent integration.** MD Reader is being designed to be
-*AI-native*. The same Rust commands the UI uses will be exposed
-to an agent, with the same guarantees: writes stay inside the
-folder, Excalidraw saves stay clean, scroll position preserved.
-Hand the agent the folder and let it work.
+**Phase 1 of AI-agent integration is shipped.** The local MCP
+server runs in the app and exposes seven tools (`open_file`,
+`get_current_chapter`, `get_chapter_content`, `get_selected_text`,
+`get_book_toc`, `capture_screenshot`, `get_debug_log`). Agents are
+registered with one toggle in Settings → AI agent control
+([`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md)).
+**Phase 2** is the in-app sidebar chat (5 agents in parallel,
+Tauri-event wired) — designed, not built. **v2** is anchor-based
+edit: the user points at a block, the agent returns a surgical
+diff, the editor applies it. Both phases are scoped in
+`vault/plan/20260613_*_design.md` and depend on v1.1 #23
+(stable block IDs everywhere).
 
 ---
 

@@ -11,6 +11,7 @@
 // `renderers/manifest.json` — no changes needed in this file.
 import showdown from 'showdown';
 import { enhance as registryEnhance } from './registry.js';
+import { sanitizeHtml } from './sanitize.js';
 // Import the renderer set so it registers itself with the registry
 // at module init. Consumers that want a different renderer set can
 // import specific files instead.
@@ -25,8 +26,28 @@ const converter = new showdown.Converter({
   ghCodeBlocks: true,
 });
 
+/**
+ * Render a markdown source string to a sanitized HTML body string.
+ *
+ * @param {string} text - Raw chapter markdown (may be untrusted; see WHY below).
+ * @returns {string} Sanitized HTML, ready to be inserted via Svelte `{@html}`
+ *   and then post-processed by `enhance()`.
+ *
+ * Note: the returned HTML is NOT yet enhanced — fence bodies are still inert
+ * `<pre><code class="language-*">` placeholders. Call `enhance()` on the
+ * mounted DOM node afterwards to activate syntax highlighting, math, diagrams,
+ * etc. Empty/whitespace input renders to an empty body.
+ */
 export function renderMarkdown(text) {
-  return converter.makeHtml(text);
+  // showdown passes raw HTML in the source straight through, and the result is
+  // inserted via Svelte's {@html}. Since chapter markdown can be untrusted
+  // (shared / downloaded / LLM-generated) and this runs in a WebView with IPC
+  // authority, sanitize the rendered body to strip script-execution vectors.
+  // This runs BEFORE enhance(), so the fence placeholders (<pre><code
+  // class="language-*">) and heading ids/classes the pipeline depends on are
+  // preserved — only executable markup is removed. The fence renderers
+  // (svg/html) sanitize their own rendered output separately.
+  return sanitizeHtml(converter.makeHtml(text));
 }
 
 /**

@@ -1,5 +1,19 @@
 <script>
-  // React island that mounts @excalidraw/excalidraw into a Svelte-owned div.
+  // ExcalidrawViewer — React island that mounts @excalidraw/excalidraw into a
+  // Svelte-owned div.
+  //
+  // Single responsibility: render one ```excalidraw fenced block from a chapter
+  // as a read-only inline preview, and provide an in-app editor to modify it.
+  // It owns the React lifecycle (createRoot / unmount) for the foreign tree;
+  // Svelte never touches the DOM inside `host` / `editorHost` once React owns it.
+  //
+  // Collaborators:
+  //   - lib/tauri.js: updateExcalidrawBlock() writes a scene back into the .md
+  //     file by block index; saveBytes() exports a standalone .excalidraw file.
+  //   - lib/stores.js folderRoot: the currently-open book folder, the root the
+  //     relPath is resolved against on save.
+  //   - the markdown renderer that emits this component with json/relPath/
+  //     blockIndex props, one instance per excalidraw block.
   //
   // Two modes:
   //   - inline (default): read-only preview, lazily mounted when visible.
@@ -9,6 +23,17 @@
   //     the .md file by block index (re-reads the file each time, so multiple
   //     saves in a row work).
   //
+  // Key invariants / assumptions a maintainer must know:
+  //   - `json` is parsed exactly once (onMount). `currentScene` is the live
+  //     source of truth thereafter; the editor's internal state is authoritative
+  //     while the modal is open and flows back via onChange.
+  //   - blockIndex is the scene's position among excalidraw blocks in the file;
+  //     it MUST stay stable for save to target the right block. The Rust side
+  //     re-reads the file per save, so concurrent edits to the same chapter from
+  //     elsewhere can clobber.
+  //   - relPath is untrusted file input but is resolved under folderRoot by the
+  //     Rust command, which enforces the path-traversal boundary.
+  //
   // React + Excalidraw are dynamic-imported so the bundle only grows when
   // the user actually opens a chapter with an Excalidraw block.
   import { onMount, onDestroy, tick } from 'svelte';
@@ -16,6 +41,15 @@
   import { folderRoot } from '../lib/stores.js';
   import { get } from 'svelte/store';
 
+  // Props:
+  //   json       — raw scene as the fenced-block text (JSON string) or an object.
+  //   dark       — true in dark theme; selects the React theme and the default
+  //                scene background when none is stored.
+  //   relPath    — chapter path relative to folderRoot; '' disables save-to-file
+  //                (e.g. browser mode with no Tauri backend).
+  //   label      — optional caption shown above the preview and in the print note.
+  //   blockIndex — 0-based index of this scene among the file's excalidraw blocks;
+  //                the save target. See header invariant.
   let {
     json = '',
     dark = false,
@@ -45,6 +79,13 @@
   let saveBusy = $state(false);
   let saveError = $state('');
 
+  /** Normalize raw block text/object into a complete Excalidraw scene.
+   *  Accepts a JSON string or an already-parsed object and fills in the
+   *  fields Excalidraw requires, so a sparse block (just `elements`) still
+   *  renders. Throws on non-object input or a missing `elements` array — the
+   *  caller (onMount) turns the throw into the inline error state.
+   *  @param {string|object} raw  block text or parsed scene
+   *  @returns {object} a scene with type/version/source/elements/appState/files */
   function parseScene(raw) {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!parsed || typeof parsed !== 'object') throw new Error('not a JSON object');
@@ -63,6 +104,10 @@
   // Inline preview
   // ---------------------------------------------------------------------------
 
+  /** Lazily import React + Excalidraw and mount the read-only preview into
+   *  `host`. Idempotent via the `mounted` guard and a no-op until the scene
+   *  has parsed, so the IntersectionObserver may fire it speculatively.
+   *  Failure is surfaced in the inline `error` state, not thrown. */
   async function mountInline() {
     if (!host || mounted || !currentScene) return;
     try {
@@ -83,6 +128,8 @@
     }
   }
 
+  /** Render (or re-render) the inline preview from `currentScene`. Safe to
+   *  call repeatedly; React reconciles the same tree against new initialData. */
   function renderPreview() {
     if (!root || !ExcalidrawComp) return;
     // Re-render the inline preview off the current scene. Cheap — same
@@ -97,7 +144,7 @@
           zenModeEnabled: true,
           gridModeEnabled: false,
           theme: reactTheme,
-          name: 'md-reader-preview',
+          name: 'fenceymd-preview',
           width: '100%',
           height: 480,
         })
@@ -107,12 +154,20 @@
 
   // Whenever currentScene changes, refresh the inline preview.
   $effect(() => {
-    // Track currentScene + reactTheme so this re-runs on either change.
+    // Explicitly read currentScene + reactTheme so Svelte tracks them as deps
+    // and re-runs on either change; renderPreview() reads them indirectly
+    // (through React props) where the tracker wouldn't otherwise see them.
+    // This effect only *reads* these and writes nothing reactive, so it can't
+    // self-trigger a loop.
     void currentScene;
     void reactTheme;
     if (mounted) renderPreview();
   });
 
+  /** Svelte action: mount the inline preview the first time `node` scrolls into
+   *  view (then stop observing), keeping React/Excalidraw out of the bundle path
+   *  and off the main thread until needed. Falls back to an immediate microtask
+   *  mount where IntersectionObserver is unavailable. */
   function lazyMount(node) {
     if (typeof IntersectionObserver === 'undefined') {
       queueMicrotask(mountInline);
@@ -131,12 +186,18 @@
   // Modal editor
   // ---------------------------------------------------------------------------
 
+  /** Open the editor modal. Actual React mount is deferred to the $effect
+   *  below, which waits for the modal's `editorHost` node to exist. */
   function openEditor() {
     saveError = '';
     editorOpen = true;
   }
 
   // Mount the editor React tree once the host DOM node is in the modal.
+  // editorMounted is a plain (non-reactive) latch, not $state: it guards the
+  // one-time mount but must NOT itself be a tracked dependency, or setting it
+  // inside the effect would re-trigger the effect. The effect reads editorOpen
+  // and editorHost (reactive) and writes only the latch + calls mountEditor.
   let editorMounted = false;
   $effect(() => {
     if (editorOpen && editorHost && !editorMounted) {
@@ -146,6 +207,11 @@
     if (!editorOpen) editorMounted = false;
   });
 
+  /** Lazily import React + Excalidraw and mount the full editor into
+   *  `editorHost`. Wires onChange so live edits flow back into currentScene
+   *  (driving the inline preview underneath). loadScene/saveToActiveFile are
+   *  disabled because persistence is owned by this component, not Excalidraw's
+   *  own file actions. Failure surfaces in `saveError`, not thrown. */
   async function mountEditor() {
     if (!editorHost || !currentScene) return;
     try {
@@ -175,7 +241,7 @@
           excalidrawRef: ref,
           initialData: currentScene,
           theme: reactTheme,
-          name: 'md-reader-editor',
+          name: 'fenceymd-editor',
           onChange: handleChange,
           UIOptions: { canvasActions: { loadScene: false, saveToActiveFile: false } },
         })
@@ -186,6 +252,10 @@
     }
   }
 
+  /** Tear down the editor: unmount React, drop refs, and revert any unsaved
+   *  in-progress edits. Used both for Cancel and as the final step of a
+   *  successful save (saveToChapter has already advanced lastSavedScene by then,
+   *  so the revert is a no-op there). */
   function closeEditor() {
     // Revert currentScene to the original (last-saved) scene so the inline
     // preview doesn't show the user's in-progress edits after they cancel.
@@ -200,8 +270,6 @@
   // The last successfully-saved scene. Used to revert on cancel.
   let lastSavedScene = $state(null);
 
-  /** Save the current scene back to the .md file. Re-reads the file each
-   *  time so a second save after the first works. */
   /** Build the canonical Excalidraw JSON payload from the current scene.
    *  We only keep `viewBackgroundColor` from the editor's full appState —
    *  everything else (scroll position, hover, tool selection, runtime
@@ -283,6 +351,9 @@
   // Lifecycle
   // ---------------------------------------------------------------------------
 
+  // Parse the prop exactly once and seed both the live scene and the
+  // revert baseline. A parse failure here is the only path to the inline
+  // `error` state; mounting is gated on a valid currentScene.
   onMount(() => {
     try {
       currentScene = parseScene(json);
@@ -294,6 +365,9 @@
     }
   });
 
+  // Unmount both React roots so they don't outlive the Svelte component and
+  // leak. Svelte won't tear down a foreign React tree for us; guards swallow
+  // the "already unmounted" case (e.g. editor closed before destroy).
   onDestroy(() => {
     try { root?.unmount(); } catch (_) {}
     try { editorRoot?.unmount(); } catch (_) {}

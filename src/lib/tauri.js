@@ -7,11 +7,19 @@ import { listen as tauriListen } from '@tauri-apps/api/event';
 export const TAURI =
   typeof window !== 'undefined' && (window.__TAURI_INTERNALS__ || window.isTauri);
 
+/** Call a Rust command. Thin pass-through to the Tauri core `invoke`.
+ *  Throws synchronously-rejected if not running under Tauri, so callers in
+ *  browser/preview mode must either guard on `TAURI` first or catch (the
+ *  debug-log helpers below rely on the throw to no-op). */
 export async function invoke(cmd, args) {
   if (!TAURI) throw new Error('not running in Tauri');
   return tauriInvoke(cmd, args);
 }
 
+/** Subscribe to a Tauri event. Resolves to an unlisten function.
+ *  In a plain browser there are no events, so this returns a no-op unlisten
+ *  immediately — callers can always `(await listen(...))()` to clean up
+ *  without branching on `TAURI`. */
 export async function listen(event, handler) {
   if (!TAURI) return () => {};
   return tauriListen(event, handler);
@@ -29,9 +37,10 @@ export async function copyImageBytes(bytes) {
   return invoke('copy_image', { bytes: Array.from(bytes) });
 }
 
-/** Generate a PDF of a chapter via headless Chrome. Returns Uint8Array. */
-export async function printPDF(title, chapterHtml, dark, vars) {
-  return invoke('print_pdf', { title, chapterHtml, dark, vars });
+/** Generate a PDF of a chapter via headless Chrome. Returns Uint8Array.
+ *  PDFs are always rendered light (see build_print_html), so no theme flag. */
+export async function printPDF(title, chapterHtml, vars) {
+  return invoke('print_pdf', { title, chapterHtml, vars });
 }
 
 /** Update the Nth ` ```excalidraw ` block in a markdown file with new JSON
@@ -51,7 +60,7 @@ export async function saveClipboardImage(folder, relPath, bytes) {
 }
 
 /** Open `path` in the user's external editor. `editorOverride` is the
- *  per-user setting from `md-reader-external-editor` localStorage; when
+ *  per-user setting from `fenceymd-external-editor` localStorage; when
  *  null/empty the Rust side falls back to the OS default (`open -t` /
  *  `xdg-open` / `cmd /c start`). */
 export async function openInExternalEditor(path, editorOverride) {
@@ -80,7 +89,7 @@ export async function debugLogReveal() {
 
 // ── Window snapshot (screen capture → clipboard) ───────────────────────────
 
-/** Snapshot the MD Reader window to the system clipboard. Returns the
+/** Snapshot the FenceyMD window to the system clipboard. Returns the
  *  dimensions of the captured image so the UI can show a confirmation
  *  toast ("Copied 1100 × 820 to clipboard") without re-encoding.
  *
@@ -94,4 +103,85 @@ export async function debugLogReveal() {
 export async function snapshotApp() {
   if (!TAURI) throw new Error('snapshot requires Tauri runtime');
   return invoke('snapshot_app_to_clipboard');
+}
+
+// ── MCP server (ROADMAP integration: AI agent control) ─────────────────────
+
+/**
+ * Set the active folder + metadata on the Rust MCP server. Called from
+ * the JS `openScanResult` flow so the MCP `get_chapter_content` and
+ * `get_book_toc` tools can answer without re-scanning. Idempotent;
+ * the Rust side caches the latest payload.
+ */
+export async function mcpSetActiveFolder(root, files) {
+  if (!TAURI) return;
+  try { await invoke('mcp_set_active_folder', { root, files }); }
+  catch (e) { /* best-effort; the MCP server is opportunistic */ }
+}
+
+/** Clear the active folder cache when the user closes the book. */
+export async function mcpClearActiveFolder() {
+  if (!TAURI) return;
+  try { await invoke('mcp_clear_active_folder'); } catch { /* no-op */ }
+}
+
+/**
+ * Push the live view state (route, scroll, selection, current chapter)
+ * to the Rust MCP server. The MCP tools read this snapshot to answer
+ * `get_current_chapter` and `get_selected_text` without round-tripping
+ * back to the WebView. We push on navigation + on scroll throttle
+ * + on selection change.
+ */
+export async function mcpUpdateViewState(view) {
+  if (!TAURI) return;
+  // Lazy-import dlog to avoid a circular dep with debug-log.js →
+  // tauri.js. The cost is a one-time import on the first call.
+  try {
+    const { dlog } = await import('./debug-log.js');
+    dlog('[mcp] pushing view state', view);
+    await invoke('mcp_update_view_state', { view });
+  } catch (e) {
+    try {
+      const { dlog } = await import('./debug-log.js');
+      dlog('[mcp] view state push failed', e?.message || String(e));
+    } catch { /* even dlog failed — silent */ }
+  }
+}
+
+/**
+ * Diagnostic for the Settings panel: returns the port-file path + the
+ * cached session_context (if any agent has called `open_file` with
+ * one). Shape: `{ port_file: string, session_context: object|null }`.
+ */
+export async function mcpStatus() {
+  if (!TAURI) return null;
+  try { return await invoke('mcp_status'); } catch { return null; }
+}
+
+// ── Agent registration (Settings → AI agent control) ───────────────────────
+
+/**
+ * List every supported AI agent with its detected/registered state. Each
+ * entry: `{ id, display_name, detected, registered, config_path }`. Returns
+ * an empty list outside Tauri so the Settings section just renders nothing.
+ */
+export async function agentsDetect() {
+  if (!TAURI) return [];
+  try { return await invoke('agents_detect'); } catch { return []; }
+}
+
+/**
+ * Register FenceyMD's MCP server into the agent `id`'s own config file
+ * (idempotent, non-destructive). Throws with a human-readable message on
+ * failure so the Settings UI can surface it inline.
+ */
+export async function agentsRegister(id) {
+  if (!TAURI) throw new Error('agent registration requires the desktop app');
+  return invoke('agents_register', { id });
+}
+
+/** Remove FenceyMD from agent `id`'s config. No-op if it wasn't registered. */
+export async function agentsUnregister(id) {
+  if (!TAURI) throw new Error('agent registration requires the desktop app');
+  return invoke('agents_unregister', { id });
 }

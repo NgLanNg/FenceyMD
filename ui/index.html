@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MD Reader</title>
+  <title>FenceyMD</title>
 
 
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Inter:wght@400;500;600&display=swap" />
@@ -965,7 +965,7 @@
 
 <!-- PICKER -->
 <div id="picker" class="picker-screen">
-  <h1>MD Reader</h1>
+  <h1>FenceyMD</h1>
   <p>Pick any folder of Markdown files — chapters, notes, docs. Everything loads locally, no server needed.</p>
   <button class="picker-btn" onclick="triggerFolderPicker()">Open Folder</button>
   <p class="picker-hint">Chromium / Chrome only — grants filesystem access to the chosen folder</p>
@@ -1034,7 +1034,7 @@ function progressFor(diskPath) { return progressMap[diskPath] || { scroll: 0, bo
 // ── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
   initTheme();
-  const savedCW = localStorage.getItem('md-reader-content-width');
+  const savedCW = localStorage.getItem('fenceymd-content-width');
   if (savedCW) document.documentElement.style.setProperty('--content-w', savedCW + 'px');
   if (savedCW) adjustContentWidth(0);
   const p = new URL(location.href).searchParams;
@@ -1257,10 +1257,10 @@ function filterSidebar(q) {
 function toggleSidebar() {
   const shell = document.getElementById('app-shell');
   shell.classList.toggle('nav-collapsed');
-  localStorage.setItem('md-reader-nav-collapsed', shell.classList.contains('nav-collapsed') ? '1' : '0');
+  localStorage.setItem('fenceymd-nav-collapsed', shell.classList.contains('nav-collapsed') ? '1' : '0');
 }
 function restoreSidebarCollapsed() {
-  if (localStorage.getItem('md-reader-nav-collapsed') === '1') {
+  if (localStorage.getItem('fenceymd-nav-collapsed') === '1') {
     document.getElementById('app-shell').classList.add('nav-collapsed');
   }
 }
@@ -1993,7 +1993,7 @@ function adjustFontSize(delta) {
   const idx = sizes.indexOf(current);
   const nextIdx = Math.max(0, Math.min(sizes.length - 1, idx + delta));
   html.setAttribute('data-font-size', sizes[nextIdx] || '');
-  localStorage.setItem('md-reader-fontsize', sizes[nextIdx] || '');
+  localStorage.setItem('fenceymd-fontsize', sizes[nextIdx] || '');
 }
 
 function adjustContentWidth(delta) {
@@ -2011,7 +2011,7 @@ function adjustContentWidth(delta) {
     wrapper.style.width = newW + 'px';
   }
   if (contentA) contentA.style.width = newW + 'px';
-  localStorage.setItem('md-reader-content-width', newW);
+  localStorage.setItem('fenceymd-content-width', newW);
 }
 
 function copyChapterLink() {
@@ -2086,7 +2086,7 @@ function toggleTheme() {
   const html = document.documentElement;
   const isDark = html.getAttribute('data-theme') === 'dark';
   html.setAttribute('data-theme', isDark ? 'light' : 'dark');
-  localStorage.setItem('md-reader-theme', isDark ? 'light' : 'dark');
+  localStorage.setItem('fenceymd-theme', isDark ? 'light' : 'dark');
   const btn = document.getElementById('theme-btn');
   if (btn) {
     btn.innerHTML = isDark
@@ -2097,8 +2097,8 @@ function toggleTheme() {
 
 // ── THEME INIT ───────────────────────────────────────────────────────────────
 function initTheme() {
-  const savedTheme = localStorage.getItem('md-reader-theme');
-  const savedFont   = localStorage.getItem('md-reader-fontsize');
+  const savedTheme = localStorage.getItem('fenceymd-theme');
+  const savedFont   = localStorage.getItem('fenceymd-fontsize');
   if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
   if (savedFont)   document.documentElement.setAttribute('data-font-size', savedFont);
 }
@@ -2117,7 +2117,7 @@ async function loadTestData() {
 
   groupMeta = sortGroups(groupMeta);
 
-  folderName = 'md-reader';
+  folderName = 'fenceymd';
 }
 
 // Boot

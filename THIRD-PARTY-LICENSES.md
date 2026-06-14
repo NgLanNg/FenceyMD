@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-MD Reader (MIT) is built on top of open-source dependencies from
+FenceyMD (MIT) is built on top of open-source dependencies from
 the npm and Cargo ecosystems. This file is the human-readable
 summary; the per-dependency table is in
 [THIRD-PARTY-LICENSES.csv](./THIRD-PARTY-LICENSES.csv).
@@ -99,7 +99,7 @@ a binary distribution. The full list is in the CSV.
 `elkjs@0.9.3` (npm) — the layout engine mermaid uses for some
 diagram types. EPL-2.0 is a weak copyleft: source-level
 modifications to elkjs itself must be released, but merely
-distributing MD Reader (which links elkjs via mermaid) is fine.
+distributing FenceyMD (which links elkjs via mermaid) is fine.
 The dep is loaded lazily, so a chapter without a mermaid diagram
 never pulls it in.
 

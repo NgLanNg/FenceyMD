@@ -1,3 +1,38 @@
+//! FenceyMD — Tauri backend.
+//!
+//! Single responsibility: the privileged, filesystem-and-OS-facing half of the
+//! desktop Markdown book reader. Everything that the sandboxed WKWebView frontend
+//! cannot do itself lives here and is reached over Tauri IPC via `#[tauri::command]`
+//! handlers (registered in `main`):
+//!   - scanning a chosen folder for `.md` files and streaming their contents up;
+//!   - persisting lightweight state (last folder, recents, per-file reading
+//!     progress) to `app_data_dir/state.json`;
+//!   - writing edited markdown / pasted images back to disk;
+//!   - exporting a chapter to PDF by driving the system's headless Chrome;
+//!   - native clipboard / save-dialog / external-editor / window-snapshot bridges
+//!     the webview has no API for;
+//!   - watching the open folder and emitting `library-changed` on edits;
+//!   - a file-based debug log the user can inspect when the hidden webview console
+//!     is unavailable.
+//!
+//! Collaborators: the frontend (`src/lib/*.js`, Svelte components) is the only
+//! caller; `src/lib/renderers/manifest.json` is the shared source of truth for
+//! fence-language rendering and is embedded here at compile time so the PDF path
+//! and the JS registry can never drift.
+//!
+//! Trust model / key invariants a maintainer MUST keep in mind:
+//!   - `folder` / `rel_path` pairs arriving from the frontend are UNTRUSTED. Every
+//!     write path (`write_file`, `save_clipboard_image`, `update_excalidraw_block`,
+//!     `rename_file`) MUST canonicalize and bounds-check against the chosen root
+//!     and refuse symlinked leaves — see the per-fn notes. Do not add a write that
+//!     skips this.
+//!   - `chapter_html` for the PDF path is sanitized upstream by `renderMarkdown`,
+//!     but the chapter `title` is NOT — it is HTML-escaped here before it reaches
+//!     headless Chrome (see `build_print_html`).
+//!   - Printed/exported PDFs are ALWAYS light-themed regardless of the live theme
+//!     (see `build_print_html`); edit `build_print_html` for print styling, never
+//!     the app's CSS.
+
 // Prevents a console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -9,27 +44,39 @@ use std::sync::Mutex;
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, Debouncer};
 use serde::{Deserialize, Serialize};
+use tauri::async_runtime as tauri_async;
+
+// ROADMAP integration: local MCP server (AI agent control surface).
+mod mcp;
+// One-click registration of FenceyMD into each AI agent's MCP config.
+mod agents;
 use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
 
 // ── Data returned to the frontend ───────────────────────────────────────────
 
-#[derive(Serialize, Clone)]
-struct MdFile {
+/// One markdown file discovered by a folder scan, with its body inlined so the
+/// frontend can build its index in a single IPC round-trip.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MdFile {
     /// Relative path under the chosen root, using '/' separators.
     path: String,
     name: String,
     content: String,
 }
 
+/// Result of scanning a folder: its display name, the absolute root (the key
+/// everything else is stored under), and every `.md` file found.
 #[derive(Serialize, Clone)]
-struct ScanResult {
+pub struct ScanResult {
     folder_name: String,
     /// Absolute path of the scanned root (used as the persistence key).
-    root: String,
-    files: Vec<MdFile>,
+    pub root: String,
+    pub files: Vec<MdFile>,
 }
 
+/// A recents-list entry. `exists` is computed at read time so the UI can grey
+/// out folders that have since been moved/deleted without dropping them.
 #[derive(Serialize)]
 struct RecentEntry {
     path: String,
@@ -39,6 +86,8 @@ struct RecentEntry {
 
 // ── Persisted state (app_data_dir/state.json) ────────────────────────────────
 
+/// Per-file reading state. `scroll` is a 0..1 fraction (resolution-independent).
+/// Every field is `#[serde(default)]` so older state.json files load forward.
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct FileProgress {
     #[serde(default)]
@@ -47,6 +96,10 @@ struct FileProgress {
     bookmarked: bool,
 }
 
+/// The whole persisted document (`app_data_dir/state.json`). Read/written
+/// wholesale on each mutation — it is tiny, so we accept the read-modify-write
+/// over the complexity of incremental persistence. All fields default so a
+/// missing/partial file deserializes cleanly rather than wiping state.
 #[derive(Serialize, Deserialize, Default)]
 struct Store {
     #[serde(default)]
@@ -58,8 +111,12 @@ struct Store {
     progress: HashMap<String, HashMap<String, FileProgress>>,
 }
 
+/// Maximum number of folders kept in the recents list (oldest evicted).
 const RECENTS_CAP: usize = 12;
 
+/// Absolute path of the state file. Falls back to the OS temp dir if the app
+/// data dir can't be resolved, and best-effort creates the parent so callers
+/// can write unconditionally.
 fn store_path(app: &AppHandle) -> PathBuf {
     let dir = app
         .path()
@@ -69,6 +126,9 @@ fn store_path(app: &AppHandle) -> PathBuf {
     dir.join("state.json")
 }
 
+/// Load the persisted store. A missing, unreadable, or malformed file yields a
+/// default `Store` rather than an error — losing state is preferable to a hard
+/// failure, and the next write heals the file.
 fn read_store(app: &AppHandle) -> Store {
     let path = store_path(app);
     std::fs::read_to_string(&path)
@@ -77,12 +137,109 @@ fn read_store(app: &AppHandle) -> Store {
         .unwrap_or_default()
 }
 
+/// Persist the store. Best-effort: serialization or write failure is swallowed
+/// so a transient disk error never breaks the foreground operation that
+/// triggered the save.
 fn write_store(app: &AppHandle, store: &Store) {
     if let Ok(json) = serde_json::to_string_pretty(store) {
         let _ = std::fs::write(store_path(app), json);
     }
 }
 
+/// One-time migration: copy the user's state from the pre-rebrand
+/// `com.mdreader.app` data dir into the new `com.fenceymd.app` data dir.
+///
+/// Runs at app setup. Idempotent: if the new state already has data
+/// (recents or progress), the old data is *merged in* (recents deduped,
+/// progress merged per-chapter) rather than replaced. After a successful
+/// merge the old state file is renamed to `state.json.migrated` so we
+/// never re-run. Best-effort: any failure is silently ignored — a missing
+/// or unreadable old dir just means there's no prior state to migrate.
+///
+/// Why: the rebrand moved the bundle id, so the OS now writes app data
+/// under a new directory. Users who already had MD Reader installed lose
+/// their recents + reading progress unless we copy it. This is the
+/// canonical place to do that copy.
+fn migrate_old_state(app: &AppHandle) {
+    let new_path = store_path(app);
+    let new_dir = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let new_dir_str = new_dir.to_string_lossy().to_string();
+    // Don't run if the new data dir isn't the FenceyMD dir (defensive — a
+    // different bundle id like a test build shouldn't trigger the migration).
+    if !new_dir_str.contains("com.fenceymd.app") {
+        return;
+    }
+
+    // Locate the old MD Reader data dir. On macOS the convention is the
+    // bundle id reversed-DNS; on Linux it's $XDG_DATA_HOME/<id>; on
+    // Windows it's %APPDATA%\<id>. For the migration we only need
+    // *some* known location — we try the macOS path first (most users
+    // are on macOS), then fall back to a `$HOME` heuristic.
+    let home = match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(h) => h,
+        None => return,
+    };
+    let old_state = home
+        .join("Library/Application Support/com.mdreader.app/state.json");
+
+    if !old_state.exists() {
+        return; // No prior install to migrate from.
+    }
+    let old_json = match std::fs::read_to_string(&old_state) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let old_store: Store = match serde_json::from_str(&old_json) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Load whatever the new state has now (defaults if missing/malformed).
+    let mut new_store: Store = std::fs::read_to_string(&new_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // Merge: prefer old values, but never lose new ones.
+    if old_store.last_folder.is_some() {
+        new_store.last_folder = old_store.last_folder.clone();
+    }
+    // Recents: union, dedupe, old-first order.
+    let mut seen = std::collections::HashSet::new();
+    let mut recents = Vec::new();
+    for r in old_store.recents.iter().chain(new_store.recents.iter()) {
+        if seen.insert(r.clone()) {
+            recents.push(r.clone());
+        }
+    }
+    new_store.recents = recents;
+    // Progress: per-book merge — for each book, take all old chapters
+    // plus any new chapters not already present.
+    for (book, old_chapters) in old_store.progress {
+        let entry = new_store.progress.entry(book).or_default();
+        for (ch, val) in old_chapters {
+            entry.entry(ch).or_insert(val);
+        }
+    }
+    // Prefs (if any) — currently the Rust Store has no prefs field, but we
+    // accept a `prefs` key for forward compatibility (the JS side may write
+    // UI prefs into the same state file in the future). No-op today.
+
+    // Persist the merged state to the new location.
+    if let Ok(json) = serde_json::to_string_pretty(&new_store) {
+        let _ = std::fs::write(&new_path, json);
+    }
+    // Rename the old state so we don't re-migrate on next launch. (Keep
+    // the file on disk for the user's reference rather than deleting.)
+    let _ = std::fs::rename(&old_state, old_state.with_extension("json.migrated"));
+    eprintln!("[fenceymd] migrated state from {old_state:?} → {new_path:?}");
+}
+
+/// Record `root` as the last-opened folder and move it to the front of recents,
+/// de-duplicating and capping at `RECENTS_CAP`. Called from every open path.
 fn record_open(app: &AppHandle, root: &str) {
     let mut store = read_store(app);
     store.last_folder = Some(root.to_string());
@@ -104,7 +261,9 @@ fn record_open(app: &AppHandle, root: &str) {
 // Settings panel. We never read it back into the UI automatically; the
 // "Open debug log folder" button in Settings hands the path to the OS.
 
-fn debug_log_path(app: &AppHandle) -> PathBuf {
+/// Absolute path of the debug log (`<app_data_dir>/debug.log`). Same temp-dir
+/// fallback + best-effort parent creation as `store_path`.
+pub fn debug_log_path(app: &AppHandle) -> PathBuf {
     let dir = app
         .path()
         .app_data_dir()
@@ -182,7 +341,7 @@ fn debug_log_reveal(app: AppHandle) -> Result<(), String> {
 
 /// Recursively scan `root` for `.md` files, returning their relative paths +
 /// contents. Hidden files/dirs (any path segment starting with '.') are skipped.
-fn scan_folder(root: &Path) -> ScanResult {
+pub fn scan_folder(root: &Path) -> ScanResult {
     let folder_name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -209,7 +368,28 @@ fn scan_folder(root: &Path) -> ScanResult {
         if rel_str.split('/').any(|seg| seg.starts_with('.')) {
             continue;
         }
-        let content = std::fs::read_to_string(p).unwrap_or_default();
+        // Read the body, but: (1) cap per-file size so one pathological file
+        // can't blow up memory on every (re)scan — the watcher re-scans on each
+        // change; (2) log read failures instead of silently turning them into
+        // empty content (which masked permission/encoding problems).
+        const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024; // 5 MB — generous for markdown
+        let content = match std::fs::metadata(p) {
+            Ok(m) if m.len() > MAX_FILE_BYTES => {
+                eprintln!(
+                    "[fenceymd] scan: skipping oversized file ({} bytes): {}",
+                    m.len(),
+                    p.display()
+                );
+                String::new()
+            }
+            _ => match std::fs::read_to_string(p) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[fenceymd] scan: failed to read {}: {}", p.display(), e);
+                    String::new()
+                }
+            },
+        };
         files.push(MdFile {
             path: rel_str,
             name,
@@ -256,14 +436,8 @@ async fn pick_folder(app: AppHandle) -> Option<ScanResult> {
 fn open_folder_path(app: AppHandle, path: String) -> Option<ScanResult> {
     let p = Path::new(&path);
     if !p.is_dir() {
-        eprintln!("[md-reader] open_folder_path: path is not a dir: {path}");
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(debug_log_path(&app))
-            .and_then(|mut f| {
-                std::io::Write::write_all(&mut f, format!("[rust] open_folder_path: not a dir: {path}\n").as_bytes())
-            });
+        eprintln!("[fenceymd] open_folder_path: path is not a dir: {path}");
+        log_from_rust(&app, &format!("[rust] open_folder_path: not a dir: {path}"));
         return None;
     }
     let scan_start = std::time::Instant::now();
@@ -271,27 +445,20 @@ fn open_folder_path(app: AppHandle, path: String) -> Option<ScanResult> {
     let elapsed = scan_start.elapsed();
     let total_bytes: usize = result.files.iter().map(|f| f.content.len()).sum();
     eprintln!(
-        "[md-reader] open_folder_path: scanned {} files, {} bytes, {:?}",
+        "[fenceymd] open_folder_path: scanned {} files, {} bytes, {:?}",
         result.files.len(),
         total_bytes,
         elapsed
     );
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(debug_log_path(&app))
-        .and_then(|mut f| {
-            std::io::Write::write_all(
-                &mut f,
-                format!(
-                    "[rust] open_folder_path: path={path} files={} bytes={} elapsed_ms={}\n",
-                    result.files.len(),
-                    total_bytes,
-                    elapsed.as_millis()
-                )
-                .as_bytes(),
-            )
-        });
+    log_from_rust(
+        &app,
+        &format!(
+            "[rust] open_folder_path: path={path} files={} bytes={} elapsed_ms={}",
+            result.files.len(),
+            total_bytes,
+            elapsed.as_millis()
+        ),
+    );
     record_open(&app, &result.root);
     Some(result)
 }
@@ -341,6 +508,21 @@ fn get_progress(app: AppHandle, folder: String) -> HashMap<String, FileProgress>
     read_store(&app).progress.remove(&folder).unwrap_or_default()
 }
 
+/// Read the persisted recents list. Used by the MCP `open_file`
+/// resolver to find a folder that contains an absolute path the
+/// agent asked to open. Most-recent first.
+///
+/// We only return paths that still exist on disk. Stale entries are
+/// filtered — they're useless to the resolver and the agent would
+/// just see a "folder gone" error otherwise.
+pub fn mcp_recents(app: &AppHandle) -> Vec<String> {
+    read_store(app)
+        .recents
+        .into_iter()
+        .filter(|p| std::path::Path::new(p).is_dir())
+        .collect()
+}
+
 /// Save reading progress (scroll fraction + bookmark) for a file in a folder.
 #[tauri::command]
 fn save_progress(app: AppHandle, folder: String, path: String, scroll: f64, bookmarked: bool) {
@@ -360,12 +542,48 @@ fn save_progress(app: AppHandle, folder: String, path: String, scroll: f64, book
 fn write_file(folder: String, rel_path: String, content: String) -> Result<(), String> {
     let root = Path::new(&folder);
     let target = root.join(&rel_path);
-    // Reject traversal: the canonicalized parent must stay inside the root.
     let root_canon = root.canonicalize().map_err(|e| e.to_string())?;
-    let parent = target.parent().ok_or("invalid path")?;
-    let parent_canon = parent.canonicalize().map_err(|e| e.to_string())?;
-    if !parent_canon.starts_with(&root_canon) {
+
+    // Reject traversal. The parent dir may not exist yet (a save into a new
+    // subfolder), so — like save_clipboard_image — walk up to the nearest
+    // *existing* ancestor and bounds-check its canonical path. This makes
+    // "../escape.md" fail even when the immediate parent doesn't exist, and
+    // lets a legitimate save into a not-yet-created subdir succeed.
+    let mut probe = target.clone();
+    let ancestor = loop {
+        let parent = match probe.parent() {
+            Some(p) => p,
+            None => return Err("invalid path".into()),
+        };
+        if parent.as_os_str().is_empty() { return Err("invalid path".into()); }
+        if parent.is_dir() { break parent.to_path_buf(); }
+        match parent.file_name() {
+            Some(_) => probe = parent.to_path_buf(),
+            None => return Err("invalid path".into()),
+        }
+    };
+    let ancestor_canon = ancestor.canonicalize().map_err(|e| e.to_string())?;
+    if !ancestor_canon.starts_with(&root_canon) {
         return Err("refusing to write outside the selected folder".into());
+    }
+    // If a leaf already exists, make sure we won't write THROUGH a symlink out
+    // of the sandbox. Use symlink_metadata (does NOT follow the link) rather
+    // than exists()/canonicalize: exists() follows the link and returns false
+    // for a *dangling* symlink, so a crafted `note.md -> /outside/x` (target
+    // absent) would slip past and std::fs::write would then create the file
+    // outside the root. We refuse any symlinked leaf, and bounds-check a real
+    // file's canonical path.
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            return Err("refusing to write through a symlink".into());
+        }
+        let target_canon = target.canonicalize().map_err(|e| e.to_string())?;
+        if !target_canon.starts_with(&root_canon) {
+            return Err("refusing to write outside the selected folder".into());
+        }
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&target, content).map_err(|e| e.to_string())
 }
@@ -388,7 +606,14 @@ fn locate_excalidraw_block(content: &str, block_index: usize) -> Option<(usize, 
         let line_start = content[..byte_pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
         let line_prefix = &content[line_start..byte_pos];
         if line_prefix.chars().all(|c| c == ' ' || c == '\t') && content[byte_pos..].starts_with("```") {
-            let fence_end_rel = content[byte_pos..].find('\n').unwrap_or(content.len() - byte_pos);
+            let fence_end_rel = match content[byte_pos..].find('\n') {
+                Some(p) => p,
+                // An opening fence with no trailing newline is the file's last
+                // line: it has no body and no closing fence. Bail instead of
+                // computing an out-of-bounds body_start (byte_pos+len+1), which
+                // would panic on the `&content[body_start..]` slice below.
+                None => return None,
+            };
             let fence_line = &content[byte_pos..byte_pos + fence_end_rel];
             // The info string is whatever's between the ``` and the newline,
             // trimmed. A closing fence has no info (or its info starts with
@@ -558,7 +783,7 @@ fn copy_image(bytes: Vec<u8>) -> Result<(), String> {
     cb.set_image(data).map_err(|e| e.to_string())
 }
 
-/// Snapshot the MD Reader window to the system clipboard.
+/// Snapshot the FenceyMD window to the system clipboard.
 ///
 /// The user-visible affordance is "take a snapshot of what the app looks
 /// like right now and put it on the clipboard so I can paste it
@@ -602,12 +827,12 @@ fn snapshot_app_to_clipboard(app: AppHandle) -> Result<SnapshotInfo, String> {
             }
             // Fallback: match by app name. Title changes per chapter.
             w.app_name()
-                .map(|n| n.to_lowercase().contains("md reader"))
+                .map(|n| n.to_lowercase().contains("fenceymd"))
                 .unwrap_or(false)
         })
         .ok_or_else(|| {
             log_from_rust(&app, "[rust] snapshot: no matching window found");
-            "MD Reader window not found".to_string()
+            "FenceyMD window not found".to_string()
         })?;
 
     let img = me.capture_image().map_err(|e| {
@@ -684,6 +909,17 @@ fn save_clipboard_image(folder: String, rel_path: String, bytes: Vec<u8>) -> Res
     if !ancestor_canon.starts_with(&root_canon) {
         return Err("refusing to write outside the selected folder".into());
     }
+    // Same symlink-leaf defense as write_file: don't write through a symlinked
+    // leaf (a dangling one slips past exists()/canonicalize and would escape).
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            return Err("refusing to write through a symlink".into());
+        }
+        let target_canon = target.canonicalize().map_err(|e| e.to_string())?;
+        if !target_canon.starts_with(&root_canon) {
+            return Err("refusing to write outside the selected folder".into());
+        }
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -698,20 +934,44 @@ fn save_clipboard_image(folder: String, rel_path: String, bytes: Vec<u8>) -> Res
 /// in TextEdit (the universal fallback) — `open` without `-t` would
 /// open the user's default app for that extension, which is usually
 /// fine but `-t` is the explicit "give me an editor" affordance.
+//
+// TRUST BOUNDARY: `editor_override` is a user-chosen setting (analogous to
+// git's `core.editor`), entered in the Settings UI. We spawn it directly —
+// NOT through a shell — so the args carry no shell-metacharacter meaning and
+// the only thing that runs is the named binary. The setting is the user's own
+// choice; we are not protecting against a user who deliberately points it at a
+// harmful binary, but we do reject control characters as a defense-in-depth
+// guard against a tampered/injected value (and to keep errors/logs clean).
 #[tauri::command]
 fn open_in_external_editor(path: String, editor_override: Option<String>) -> Result<(), String> {
     let p = Path::new(&path);
-    if !p.exists() {
+    if !p.is_file() {
         return Err("file not found".into());
     }
     if let Some(editor) = editor_override {
         let trimmed = editor.trim();
         if !trimmed.is_empty() {
-            let mut parts = trimmed.split_whitespace();
-            let bin = parts.next().unwrap_or(trimmed);
-            let rest: Vec<&str> = parts.collect();
-            let mut cmd = Command::new(bin);
-            for a in rest { cmd.arg(a); }
+            // Reject control characters (newlines, NUL, etc.). A legitimate
+            // editor command never contains them; their presence signals a
+            // tampered setting, so we refuse rather than spawn something odd.
+            if trimmed.chars().any(|c| c.is_control()) {
+                return Err("invalid editor command".into());
+            }
+            // If the whole override is an existing file path, treat it as the
+            // binary with no args — this handles editor binaries whose install
+            // path contains spaces (e.g. "/Applications/Visual Studio
+            // Code.app/Contents/MacOS/Electron"), which a naive whitespace
+            // split would shatter into a bogus "/Applications/Visual" command.
+            // Otherwise it's a "cmd [args]" form (e.g. "subl -w"): split.
+            let mut cmd = if Path::new(trimmed).is_file() {
+                Command::new(trimmed)
+            } else {
+                let mut parts = trimmed.split_whitespace();
+                let bin = parts.next().unwrap_or(trimmed);
+                let mut c = Command::new(bin);
+                for a in parts { c.arg(a); }
+                c
+            };
             return cmd.arg(p).spawn().map(|_| ()).map_err(|e| format!("failed to spawn `{trimmed}`: {e}"));
         }
     }
@@ -778,6 +1038,10 @@ fn rename_file(folder: String, rel_path: String, new_name: String) -> Result<Str
 
 // ── PDF export via headless Chrome ────────────────────────────────────────────
 
+/// Monotonic counter giving each `print_pdf` call a unique temp dir, so
+/// concurrent exports don't clobber a shared file.
+static PDF_EXPORT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Render `chapter_html` (already-rendered markdown + mermaid SVGs) inside a
 /// full HTML document and generate a PDF using the system's Chrome/Chromium in
 /// headless mode. Returns the raw PDF bytes.
@@ -789,13 +1053,21 @@ fn rename_file(folder: String, rel_path: String, new_name: String) -> Result<Str
 async fn print_pdf(
     title: String,
     chapter_html: String,
-    _dark: bool, // kept for backwards compat; theme is now read from `vars`
     vars: std::collections::HashMap<String, String>,
 ) -> Result<Vec<u8>, String> {
     let html = build_print_html(&title, &chapter_html, &vars);
 
-    // Write the self-contained HTML to a temp file so Chrome can open it via file://.
-    let tmp_dir = std::env::temp_dir().join("mdreader_pdf");
+    // Write the self-contained HTML to a temp file so Chrome can open it via
+    // file://. Use a UNIQUE subdir per call (pid + monotonic counter): two
+    // concurrent exports would otherwise clobber a shared export.html/.pdf, and
+    // a fresh dir guarantees `read(pdf_path)` can't return a stale PDF left by a
+    // previous run if Chrome exits 0 without actually writing one.
+    let uniq = format!(
+        "{}-{}",
+        std::process::id(),
+        PDF_EXPORT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let tmp_dir = std::env::temp_dir().join("fenceymd_pdf").join(&uniq);
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
     let html_path = tmp_dir.join("export.html");
     std::fs::write(&html_path, html).map_err(|e| e.to_string())?;
@@ -803,20 +1075,40 @@ async fn print_pdf(
     // Find Chrome on macOS / Linux / Windows.
     let chrome = find_chrome();
     let pdf_path = tmp_dir.join("export.pdf");
+    let file_url = format!("file://{}", html_path.display());
+    let print_arg = format!("--print-to-pdf={}", pdf_path.display());
 
-    let output = Command::new(&chrome)
-        .args([
-            "--headless",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
+    // Render Chrome's sandbox ENABLED (the secure default). `--no-sandbox`
+    // disables Chrome's primary containment layer and is a well-known footgun;
+    // a normal desktop launch doesn't need it. We only fall back to it if the
+    // sandboxed run fails — which happens in some Linux/container environments
+    // (e.g. running as root, or without user-namespace support) where Chrome
+    // refuses to start otherwise. Secure by default, resilient where required.
+    let run = |no_sandbox: bool| -> std::io::Result<std::process::Output> {
+        let mut cmd = Command::new(&chrome);
+        cmd.arg("--headless");
+        if no_sandbox {
+            cmd.args(["--no-sandbox", "--disable-setuid-sandbox"]);
+        }
+        cmd.args([
             "--disable-gpu",
             "--no-pdf-header-footer",
             "--virtual-time-budget=2000",
-            &format!("--print-to-pdf={}", pdf_path.display()),
-            &format!("file://{}", html_path.display()),
-        ])
-        .output()
+            &print_arg,
+            &file_url,
+        ]);
+        cmd.output()
+    };
+
+    let mut output = run(false)
         .map_err(|e| format!("failed to spawn {}: {}", chrome.display(), e))?;
+    if !output.status.success() {
+        // Retry with the sandbox disabled (constrained Linux/container hosts).
+        let first_err = String::from_utf8_lossy(&output.stderr).to_string();
+        eprintln!("[fenceymd] PDF: sandboxed Chrome failed ({first_err}); retrying with --no-sandbox");
+        output = run(true)
+            .map_err(|e| format!("failed to spawn {}: {}", chrome.display(), e))?;
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -825,13 +1117,18 @@ async fn print_pdf(
 
     let bytes = std::fs::read(&pdf_path).map_err(|e| e.to_string())?;
 
-    // Clean up temp files.
-    let _ = std::fs::remove_file(&html_path);
-    let _ = std::fs::remove_file(&pdf_path);
+    // Clean up the per-call temp dir (and its files).
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 
     Ok(bytes)
 }
 
+/// Locate the system Chrome/Chromium binary for the headless PDF render.
+/// Probes the well-known per-OS install locations first, then falls back to a
+/// bare `google-chrome` (resolved via PATH at spawn time). The returned path is
+/// only ever passed to `Command::new` as the program — never through a shell —
+/// so a path containing spaces is safe. If nothing is found the caller's spawn
+/// fails and `print_pdf` surfaces the error.
 fn find_chrome() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -924,10 +1221,15 @@ fn read_katex_css() -> Result<String, String> {
 // adding a renderer on the JS side means adding a row to the same JSON the
 // Rust side reads.
 
+/// How a manifest entry attaches to markdown, mirroring the JS registry's
+/// `kind` field: a fenced code block, an inline span, or math.
 #[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum RendererKind { Fence, Inline, Math }
 
+/// One row of the shared renderer manifest (`src/lib/renderers/manifest.json`).
+/// Deserialized chiefly to validate the JSON at compile/test time — see
+/// `load_renderer_manifest` — so not every field is consumed by Rust.
 #[derive(serde::Deserialize, Debug)]
 #[allow(dead_code)] // deserialized for validation; not every field is read
 struct ManifestEntry {
@@ -955,6 +1257,12 @@ struct ManifestEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PdfMode { Passthrough, PreFallback }
 
+/// Map a fence language to its PDF rendering mode. The single source of truth
+/// for which renderers need a print-time fallback: only `excalidraw` (an
+/// interactive Svelte mount that doesn't survive headless Chrome) is
+/// `PreFallback`; everything else is `Passthrough`. Adding another fallback
+/// renderer is a one-line addition here, not a new code path in
+/// `transform_for_pdf`.
 fn pdf_mode_for(lang: &str) -> PdfMode {
     match lang {
         "excalidraw" => PdfMode::PreFallback,
@@ -1098,11 +1406,22 @@ fn extract_attr<'a>(tag: &'a str, name: &str) -> Option<String> {
 fn load_renderer_manifest() -> Vec<ManifestEntry> {
     let raw = include_str!("../../src/lib/renderers/manifest.json");
     serde_json::from_str(raw).unwrap_or_else(|e| {
-        eprintln!("[md-reader] renderer manifest parse error: {}", e);
+        eprintln!("[fenceymd] renderer manifest parse error: {}", e);
         Vec::new()
     })
 }
 
+/// Wrap an already-rendered chapter in a self-contained HTML document for the
+/// headless-Chrome PDF render. `vars` is the live `:root` CSS-custom-property
+/// snapshot (fonts/spacing/radii are honored), but COLOR vars are deliberately
+/// overridden to a fixed light palette so exports are always print-friendly
+/// regardless of the in-app theme — edit print styling HERE, never the app CSS.
+///
+/// Inlines katex + shiki CSS so math and highlighted code are legible offline,
+/// and runs `transform_for_pdf` to swap interactive fences for printable
+/// fallbacks. `title` is UNTRUSTED (first heading / file name) and is
+/// HTML-escaped before interpolation; `chapter_html` is trusted (sanitized
+/// upstream by `renderMarkdown`) and embedded verbatim. Returns the full HTML.
 fn build_print_html(
     title: &str,
     chapter_html: &str,
@@ -1126,7 +1445,7 @@ fn build_print_html(
     // the installed katex version. If the file is missing, skip with a
     // warning — the PDF will show raw `$…$` text (graceful degrade).
     let katex_css = read_katex_css().unwrap_or_else(|e| {
-        eprintln!("[md-reader] katex CSS not embedded in PDF: {}", e);
+        eprintln!("[fenceymd] katex CSS not embedded in PDF: {}", e);
         String::new()
     });
 
@@ -1522,7 +1841,11 @@ body {{
 </div>
 </body>
 </html>"#,
-      title = title,
+      // Escape the title: it's the untrusted chapter title (first heading /
+      // file name) and is interpolated into <title> and <h1>. Without this a
+      // title like `</title><script>…` would execute in the headless-Chrome
+      // render. (chapter_html is already sanitized upstream by renderMarkdown.)
+      title = html_escape(title),
       chapter_html = chapter_html,
       root_vars = root_vars,
       dark = "light",
@@ -1531,6 +1854,10 @@ body {{
 
 // ── Live file watching ─────────────────────────────────────────────────────────
 
+/// Managed state holding the single active folder watcher (or `None` before the
+/// first `watch_folder`). The `Debouncer` must be kept alive for events to keep
+/// firing; storing it here ties its lifetime to the app and replacing it drops
+/// (and stops) the previous watcher.
 type WatcherState = Mutex<Option<Debouncer<notify::RecommendedWatcher>>>;
 
 /// Start watching `path` recursively. On any debounced change, re-scan and emit
@@ -1565,7 +1892,11 @@ fn watch_folder(app: AppHandle, state: tauri::State<'_, WatcherState>, path: Str
     log_from_rust(&app, &format!("[rust] watch_folder: started on {}", root.display()));
 
     // Keep the debouncer alive by storing it in managed state (drops the old one).
-    *state.lock().unwrap() = Some(debouncer);
+    // Recover from a poisoned mutex (a prior panic while the lock was held)
+    // instead of cascading into a second panic that would take down the command
+    // handler — the stored value is just a watcher handle, safe to replace.
+    let mut guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(debouncer);
     Ok(())
 }
 
@@ -1577,7 +1908,7 @@ fn scan_path(path: String) -> ScanResult {
 
 /// Internal helper: append a one-shot line to the debug log from Rust code
 /// (e.g. the watcher, the PDF pipeline). Same format as the JS-side log.
-fn log_from_rust(app: &AppHandle, line: &str) {
+pub fn log_from_rust(app: &AppHandle, line: &str) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1590,9 +1921,49 @@ fn log_from_rust(app: &AppHandle, line: &str) {
         .and_then(|mut f| std::io::Write::write_all(&mut f, format!("[{ts}] {safe}\n").as_bytes()));
 }
 
+/// App entry point: register the empty watcher state, wire up every IPC command
+/// the frontend can invoke, and run the Tauri event loop. The
+/// `generate_handler!` list is the authoritative set of callable commands — a
+/// command not listed here is unreachable from the frontend.
 fn main() {
+    // Native MCP stdio↔HTTP bridge. When an agent spawns this binary with
+    // `--mcp-bridge`, we act as a pure stdio bridge to the running app's local
+    // MCP server and NEVER start the GUI. This MUST be the first statement in
+    // main(): no Tauri/logging init may run first, and only JSON-RPC frames
+    // may reach stdout (all bridge logging goes to stderr). See
+    // `mcp::run_bridge` for the contract.
+    if std::env::args().any(|a| a == "--mcp-bridge") {
+        mcp::run_bridge();
+        return;
+    }
+
     tauri::Builder::default()
         .manage::<WatcherState>(Mutex::new(None))
+        .setup(|app| {
+            // Rebrand migration: copy state from the pre-rebrand
+            // `com.mdreader.app` data dir into the new dir before any
+            // other subsystem reads it. Idempotent; rename-on-success
+            // means we never re-run.
+            migrate_old_state(&app.handle());
+
+            // ROADMAP integration: start the MCP server. Spawned on
+            // Tauri's tokio runtime so the UI thread is unaffected.
+            // The server binds a random localhost port and writes a
+            // port file in the app-data dir (see `mcp::port_dir`) for
+            // agent discovery. Failures are logged to debug.log and
+            // stderr but never block app startup.
+            let app_handle = app.handle().clone();
+            tauri_async::spawn(async move {
+                mcp::start(app_handle).await;
+            });
+            // Self-heal any agent registrations the user previously
+            // enabled: if the app binary moved (update / drag to a new
+            // path), rewrite the stored command to the current path.
+            // Touches ONLY agents already registered — never opts an
+            // agent in. Best-effort; logs to stderr on failure.
+            agents::refresh_registrations();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pick_folder,
             open_folder_path,
@@ -1616,9 +1987,27 @@ fn main() {
             debug_log_path_str,
             debug_log_reveal,
             snapshot_app_to_clipboard,
+            mcp::mcp_update_view_state,
+            mcp::mcp_set_active_folder,
+            mcp::mcp_clear_active_folder,
+            mcp::mcp_status,
+            agents::agents_detect,
+            agents::agents_register,
+            agents::agents_unregister,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // ROADMAP integration: clean up the MCP port file on
+            // shutdown. We catch both ExitRequested (user clicked
+            // the close button — graceful) and WindowEvent::CloseRequested
+            // is fire-and-forget per Tauri 2 semantics. We don't
+            // block the exit; the worst case if cleanup fails is a
+            // stale `port` file that the next launch overwrites.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                mcp::cleanup_port_file(app_handle);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1633,7 +2022,7 @@ mod tests {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let pid = std::process::id();
-        let base = std::env::temp_dir().join(format!("mdreader_test_book_{pid}_{n}"));
+        let base = std::env::temp_dir().join(format!("fenceymd_test_book_{pid}_{n}"));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("part-i")).unwrap();
         fs::create_dir_all(base.join(".hidden")).unwrap();
@@ -1650,7 +2039,7 @@ mod tests {
         let r = scan_folder(&base);
         // Folder name embeds the pid + counter (see fixture()) — assert
         // it matches the path's leaf rather than a literal string.
-        assert!(r.folder_name.starts_with("mdreader_test_book"));
+        assert!(r.folder_name.starts_with("fenceymd_test_book"));
         assert_eq!(
             r.folder_name,
             base.file_name().unwrap().to_string_lossy().to_string()
@@ -1672,6 +2061,18 @@ mod tests {
         assert_eq!(fs::read_to_string(base.join("intro.md")).unwrap(), "# Edited\nx");
         // Traversal outside the folder is rejected.
         assert!(write_file(folder, "../escape.md".into(), "nope".into()).is_err());
+    }
+
+    #[test]
+    fn write_file_creates_missing_parent_dirs() {
+        // A save into a not-yet-existing subfolder must succeed (write_file used
+        // to require the parent dir to already exist) while still bounds-checked.
+        let base = fixture();
+        let folder = base.to_string_lossy().to_string();
+        assert!(write_file(folder.clone(), "notes/sub/new.md".into(), "hello".into()).is_ok());
+        assert_eq!(fs::read_to_string(base.join("notes/sub/new.md")).unwrap(), "hello");
+        // Traversal through a new subdir is still rejected.
+        assert!(write_file(folder, "notes/../../escape.md".into(), "nope".into()).is_err());
     }
 
     // Exercises the real Tauri IPC dispatch: registers commands via
@@ -1708,7 +2109,7 @@ mod tests {
         // Folder name is per-test unique now — confirm it parses and starts
         // with the canonical prefix.
         let folder_name = json["folder_name"].as_str().unwrap();
-        assert!(folder_name.starts_with("mdreader_test_book"));
+        assert!(folder_name.starts_with("fenceymd_test_book"));
         assert_eq!(json["files"].as_array().unwrap().len(), 2);
     }
 
@@ -1730,6 +2131,47 @@ More prose.
         assert!(body.contains("\"elements\""));
         assert!(body.contains("[]"));
         assert_eq!(indent, "");
+    }
+
+    #[test]
+    fn locate_excalidraw_block_handles_crlf() {
+        // Windows-authored files use \r\n. The locator must still find the
+        // block (this path rewrites the user's file, so a wrong offset here
+        // corrupts content).
+        let content = "# Title\r\n\r\n```excalidraw\r\n{\"elements\":[1]}\r\n```\r\n\r\nafter\r\n";
+        let (body_start, close_start, _indent) = locate_excalidraw_block(content, 0)
+            .expect("CRLF block should be located");
+        let body = &content[body_start..close_start];
+        assert!(body.contains("\"elements\":[1]"), "body was {body:?}");
+    }
+
+    #[test]
+    fn locate_excalidraw_block_handles_tab_indent() {
+        // Tab-indented fence (e.g. inside a tab-indented list item).
+        let content = "\t```excalidraw\n\t{\"elements\":[2]}\n\t```\n";
+        let (body_start, close_start, indent) = locate_excalidraw_block(content, 0)
+            .expect("tab-indented block should be located");
+        assert_eq!(indent, "\t");
+        assert!(content[body_start..close_start].contains("\"elements\":[2]"));
+    }
+
+    #[test]
+    fn locate_excalidraw_block_accepts_trailing_info_string() {
+        // `is_excalidraw` matches `starts_with("excalidraw")`, so an info
+        // string with extra tokens must still count as an excalidraw fence.
+        let content = "```excalidraw {\"clip\":true}\n{\"elements\":[3]}\n```\n";
+        let (body_start, close_start, _indent) = locate_excalidraw_block(content, 0)
+            .expect("trailing-info fence should be located");
+        assert!(content[body_start..close_start].contains("\"elements\":[3]"));
+    }
+
+    #[test]
+    fn locate_excalidraw_block_unterminated_trailing_fence_returns_none_not_panic() {
+        // A file ending in an opening fence with NO trailing newline used to
+        // compute body_start = len+1 and panic on `&content[body_start..]`.
+        // It must return None (no complete block) instead of crashing.
+        assert!(locate_excalidraw_block("# x\n\n```excalidraw", 0).is_none());
+        assert!(locate_excalidraw_block("```js", 0).is_none());
     }
 
     #[test]
@@ -1910,7 +2352,7 @@ A --> B
 <blockquote>A quoted line to check the accent and contrast.</blockquote>
 "#;
         let html = build_print_html("Dark Export Sanity Check", body, &vars);
-        let path = std::env::temp_dir().join("mdreader_verify.html");
+        let path = std::env::temp_dir().join("fenceymd_verify.html");
         std::fs::write(&path, &html).unwrap();
         eprintln!("WROTE: {}", path.display());
     }
@@ -1931,6 +2373,24 @@ A --> B
         assert!(
             !style_block.contains("white-space: nowrap;"),
             "csv headers must not be nowrap (that clips wide tables)"
+        );
+    }
+
+    #[test]
+    fn build_print_html_escapes_untrusted_title() {
+        // The chapter title is untrusted (first heading / file name) and is
+        // interpolated into <title> and <h1>. It must be HTML-escaped so a
+        // crafted title can't inject markup/script into the headless-Chrome
+        // render.
+        let vars = std::collections::HashMap::new();
+        let html = build_print_html("</title><script>alert(1)</script>", "<p>x</p>", &vars);
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "raw <script> from the title leaked into the print HTML"
+        );
+        assert!(
+            html.contains("&lt;/title&gt;&lt;script&gt;"),
+            "title should be HTML-escaped"
         );
     }
 
@@ -1988,7 +2448,7 @@ A --> B
     fn update_excalidraw_block_round_trip() {
         // Write a fixture .md with one excalidraw block, update it, verify
         // the file's content is correct and other fences are untouched.
-        let dir = std::env::temp_dir().join("mdreader_excalidraw_test");
+        let dir = std::env::temp_dir().join("fenceymd_excalidraw_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("chapter.md");
@@ -2040,7 +2500,7 @@ A --> B
     ///  3. Return the absolute path actually written.
     #[test]
     fn save_clipboard_image_writes_and_creates_images_dir() {
-        let dir = std::env::temp_dir().join("mdreader_clip_image_test");
+        let dir = std::env::temp_dir().join("fenceymd_clip_image_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2075,7 +2535,7 @@ A --> B
 
     #[test]
     fn save_clipboard_image_rejects_traversal() {
-        let dir = std::env::temp_dir().join("mdreader_clip_image_traversal_test");
+        let dir = std::env::temp_dir().join("fenceymd_clip_image_traversal_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

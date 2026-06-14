@@ -1,4 +1,4 @@
-# MD Reader — Lean Core + Plugins Plan
+# FenceyMD — Lean Core + Plugins Plan
 
 **Decision:** Ship a **lean core** and move data/terminal to **optional plugins**.
 **Lean core:** `md · mermaid · katex · shiki · svg · excalidraw · slides`

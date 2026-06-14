@@ -2,7 +2,7 @@
 //
 // What this verifies (independent of the WebView + the JS bridge):
 //   1. xcap::Window::all() succeeds on this platform
-//   2. We can find an MD Reader window
+//   2. We can find a FenceyMD window
 //   3. capture_image() returns a non-empty RGBA buffer
 //   4. We can encode it as PNG and write to disk
 //   5. We can push it to the clipboard via arboard
@@ -24,6 +24,17 @@ fn main() {
     };
     println!("[snapshot-test] found {} windows", windows.len());
 
+    // Diagnostic: list all visible windows with their app_name + pid.
+    // Helps debug "no FenceyMD window found" failures.
+    println!("[snapshot-test] visible windows (not minimized):");
+    for w in &windows {
+        if w.is_minimized().unwrap_or(true) { continue; }
+        let wpid = w.pid().ok();
+        let name = w.app_name().ok();
+        let title = w.title().ok();
+        println!("  pid={:?} app_name={:?} title={:?}", wpid, name, title);
+    }
+
     let pid = std::process::id();
     let me = windows.into_iter().find(|w| {
         let minimized = w.is_minimized().unwrap_or(true);
@@ -31,12 +42,12 @@ fn main() {
         let wpid = w.pid().unwrap_or(0);
         if wpid == pid { return true; }
         w.app_name()
-            .map(|n| n.to_lowercase().contains("md reader"))
+            .map(|n| n.to_lowercase().contains("fenceymd"))
             .unwrap_or(false)
     });
     let me = match me {
         Some(w) => w,
-        None => { eprintln!("FAIL: no MD Reader window found"); std::process::exit(2); }
+        None => { eprintln!("FAIL: no FenceyMD window found"); std::process::exit(2); }
     };
     println!("[snapshot-test] picked window: app_name={:?} title={:?}",
              me.app_name().ok(), me.title().ok());

@@ -93,7 +93,7 @@ two regions:
 On a folder that's been opened before, the **Open last** shortcut
 (from a recents row, or the keyboard) jumps straight in.
 
-The recents list lives at `~/Library/Application Support/com.mdreader.app/state.json`,
+The recents list lives at `~/Library/Application Support/com.fenceymd.app/state.json`,
 a tiny JSON file. Move it to sync across machines; trash it to
 reset.
 

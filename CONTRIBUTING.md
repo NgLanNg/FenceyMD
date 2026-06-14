@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for considering a contribution to MD Reader. The bar is
+Thanks for considering a contribution to FenceyMD. The bar is
 mostly "match the existing patterns and verify before claiming
 done."
 

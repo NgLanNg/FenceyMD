@@ -27,8 +27,13 @@ const COMMENT_DIRECTIVE_RE = /^\s*<!--\s*_[a-zA-Z][\w-]*\s*:/;
 const BLANK_RE = /^\s*$/;
 
 /**
- * @param {string} markdown
- * @returns {string[]} array of slide source strings (in order)
+ * Split a chapter into slide source strings using the four rules in the
+ * file header (frontmatter strip → `---` split → 2+ H1 split → single).
+ *
+ * @param {string} markdown  Raw chapter markdown.
+ * @returns {string[]} Slide sources in document order. Empty array for
+ *   empty/whitespace-only input; each returned string is trimmed and
+ *   non-empty (blank slides from adjacent separators are dropped).
  */
 export function splitIntoSlides(markdown) {
   if (!markdown || !markdown.trim()) return [];
@@ -55,6 +60,10 @@ export function splitIntoSlides(markdown) {
   let current = [];
   let h1Seen = false;
 
+  // Accumulate lines into `current`; flush on each H1 *after* the first.
+  // The first H1 only sets `h1Seen` — any preamble before it stays in the
+  // opening slide rather than being dropped, and we avoid emitting an empty
+  // leading slide when the body starts with `# `.
   for (const line of lines) {
     if (/^# \S/.test(line)) {
       if (h1Seen && current.length > 0) {

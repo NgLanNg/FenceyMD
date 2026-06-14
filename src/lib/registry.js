@@ -37,10 +37,16 @@
 //     a plain `<pre>` block.
 import manifest from './renderers/manifest.json';
 
-const registry = new Map();
-const lazyLoads = new Map();
-let _defaultForCode = null;
+// Module-level state — populated by `register()` at consumer bootstrap
+// time (see the "Bootstrap" note at the bottom of the file). These live
+// outside the functions so the whole app shares one registry instance.
+const registry = new Map();           // lang -> renderer def
+const lazyLoads = new Map();          // lang -> () => Promise<module>
+let _defaultForCode = null;           // lang whose def declared `defaultFor: 'code'`
 
+// NOTE: currently unused in this module — the live SVG namespace fix
+// lives in `renderers/svg.js`, which keeps its own copy. Left here as the
+// canonical constant for when the SVG dispatch is folded into the registry.
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
@@ -76,6 +82,11 @@ export const LAZY_LOADS = lazyLoads;
  *  fallback for unknown langs, or null if no fallback is registered. */
 function resolve(lang) {
   if (registry.has(lang)) return registry.get(lang);
+  // These four are first-class "core" langs that intentionally have NO
+  // shiki fallback: a `svg`/`html`/`mermaid`/`excalidraw` fence with no
+  // registered renderer must stay raw (preserved as source), never be
+  // re-interpreted as highlighted code. Returning null tells the caller to
+  // leave the block untouched rather than fall through to `_defaultForCode`.
   if (lang === 'mermaid' || lang === 'svg' || lang === 'html' || lang === 'excalidraw') {
     return null; // unknown core lang — caller should preserve the raw block
   }
@@ -116,6 +127,19 @@ export async function dispatch(block, ctx) {
     return true;
   } catch (e) {
     console.warn(`[renderer:${block.lang}]`, e?.message || e);
+    // Surface the failure to the user instead of silently leaving raw text or
+    // a blank block (e.g. an offline lazy-import, a bad diagram, a corrupt
+    // chunk). We tag the still-present source block and prepend a small notice;
+    // the raw source stays visible so the content isn't lost. Skipped if the
+    // renderer already replaced the <pre> before throwing.
+    const pre = block.pre;
+    if (pre && pre.isConnected && !pre.querySelector('.render-error-note')) {
+      pre.classList.add('render-error');
+      const note = document.createElement('div');
+      note.className = 'render-error-note';
+      note.textContent = `Couldn't render this ${block.lang} block — showing source.`;
+      pre.prepend(note);
+    }
     return false;
   }
 }
@@ -263,6 +287,12 @@ export function wrapWithCopyButton(pre) {
   return wrapper;
 }
 
+// Add a copy button to every plain `<pre>` that a renderer didn't already
+// claim. The exclusion list skips blocks that were turned into visual output
+// (mermaid/svg/excalidraw/html, plus their slide variants) — copying their
+// rendered DOM would yield garbage — and shiki blocks, which ship their own
+// copy control. Idempotent via the `.code-block-wrapper` guard in
+// `wrapWithCopyButton`, so it's safe to re-run on every `enhance()`.
 function attachCopyButtons(area) {
   area.querySelectorAll('pre').forEach((pre) => {
     if (pre.closest('.code-block-wrapper')) return;

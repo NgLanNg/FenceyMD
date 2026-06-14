@@ -39,12 +39,32 @@ const ZOOMABLE_SELECTORS = [
   '.chapter-markdown > pre.slide-html-block',
 ];
 
+/**
+ * Map an element to one of the three label kinds in `LABELS`. Order matters:
+ * `img` is checked first, then table-like blocks; everything else (mermaid,
+ * svg, excalidraw, html, slide fences) falls through to 'diagram'.
+ * @param {Element} el a matched zoomable element.
+ * @returns {'image'|'table'|'diagram'} the kind key for `LABELS`.
+ */
 function pickKind(el) {
   if (el.matches('img')) return 'image';
   if (el.matches('table, .csv-block')) return 'table';
   return 'diagram';
 }
 
+/**
+ * Attach the hover zoom button to a single element and wire its click to
+ * openZoom(). The workhorse behind both public entry points.
+ *
+ * Idempotent: the `data-zoomable-attached` marker guards against double
+ * decoration when enhance() re-runs over already-processed DOM, so the
+ * button is never appended twice.
+ *
+ * Trust note: `btn.innerHTML` is a fixed, author-controlled SVG string with
+ * no interpolation — no untrusted markdown reaches it. The element being
+ * decorated (`el`) may hold untrusted content, but we only append to it.
+ * @param {Element} el the element to make zoomable.
+ */
 function decorate(el) {
   if (el.dataset.zoomableAttached === '1') return;
   el.dataset.zoomableAttached = '1';
@@ -82,7 +102,11 @@ function decorate(el) {
 }
 
 /** Plain-DOM helper. Walks `area` and decorates every matching
- *  element with a hover button. Idempotent. */
+ *  element with a hover button. Idempotent.
+ *
+ *  No-ops without a DOM (SSR / non-browser) or when `area` is falsy, so it
+ *  is safe to call unconditionally from the enhance() pipeline.
+ *  @param {?Element} area subtree root to scan against ZOOMABLE_SELECTORS. */
 export function applyZoomable(area) {
   if (!area || typeof document === 'undefined') return;
   for (const sel of ZOOMABLE_SELECTORS) {
@@ -92,7 +116,14 @@ export function applyZoomable(area) {
 }
 
 /** Svelte action — for ad-hoc per-template use. Same effect as
- *  `applyZoomable()` but on a single element passed via `use:zoomable`. */
+ *  `applyZoomable()` but on a single element passed via `use:zoomable`.
+ *
+ *  `opts` is accepted to satisfy the action signature but is currently
+ *  unused. `destroy()` undoes decorate(): it removes the button and the
+ *  marker so the node can be cleanly re-decorated if the action re-runs.
+ *  @param {Element} node element the action is attached to.
+ *  @param {object} [opts] reserved; no options are read today.
+ *  @returns {{destroy: () => void}} Svelte action lifecycle object. */
 export function zoomable(node, opts = {}) {
   decorate(node);
   return {

@@ -3,13 +3,26 @@
 // clipboard writes nor `<a download>`.
 import { TAURI, saveBytes, copyImageBytes } from './tauri.js';
 
+// Briefly show feedback text ("✓" / "Failed") on a button, then restore its
+// original label after 1.4s. The label is stashed in `dataset.label` so we can
+// flash any text without losing the original.
 function flashBtn(btn, text) {
   btn.textContent = text;
   setTimeout(() => { btn.textContent = btn.dataset.label; }, 1400);
 }
 
 /** Rasterize an <svg> element to a white-background PNG Blob.
- *  Scales so the longest side targets ~2400px (3×–6×) for crisp text/strokes. */
+ *  Scales so the longest side targets ~2400px (3×–6×) for crisp text/strokes.
+ *
+ *  @param {SVGElement} svgEl   The live SVG node to capture (cloned, not mutated).
+ *  @param {number} [scale]     Explicit scale factor; computed from size if omitted.
+ *  @returns {Promise<Blob>}    A PNG blob, or rejects if the SVG fails to load/encode.
+ *
+ *  The clone is serialized to a `data:` URL and drawn through an <Image>, so the
+ *  SVG must be self-contained: external <use>/CSS/font refs won't load in that
+ *  context. Falls back to the viewBox when the element has no layout box (e.g.
+ *  display:none), guaranteeing a >=1px canvas. White fill is forced because the
+ *  app theme may be dark but exported/copied diagrams must read on any surface. */
 export function svgToPngBlob(svgEl, scale) {
   return new Promise((resolve, reject) => {
     try {
@@ -50,6 +63,9 @@ export function svgToPngBlob(svgEl, scale) {
   });
 }
 
+// Copy the rasterized diagram to the clipboard. Native (Tauri) routes through
+// the Rust clipboard since WKWebView can't write image blobs; the browser path
+// uses the async Clipboard API directly.
 async function copyDiagram(svgEl) {
   const blob = await svgToPngBlob(svgEl);
   if (TAURI) {
@@ -59,6 +75,9 @@ async function copyDiagram(svgEl) {
   }
 }
 
+// Save the rasterized diagram to disk. Native uses the Rust save dialog;
+// the browser path synthesizes an `<a download>` click and revokes the object
+// URL on a delay so the download has time to start before the blob is freed.
 async function downloadDiagram(svgEl, fileName) {
   const blob = await svgToPngBlob(svgEl);
   if (TAURI) {
@@ -84,8 +103,14 @@ export function addDiagramTools(container, baseName, opts = {}) {
 
   const tools = document.createElement('div');
   tools.className = 'diagram-tools';
+  // Resolve the SVG lazily on each use rather than capturing it now: the node
+  // is replaced when a diagram re-renders (e.g. the per-diagram theme toggle),
+  // and a stale reference would export the pre-toggle image.
   const svg = () => container.querySelector('svg');
 
+  // Build a tool button. `run` is the async action; on success a text button
+  // flashes "✓", on failure "Failed". `html` buttons (icon glyphs) carry their
+  // markup in innerHTML and skip the flash so the icon isn't clobbered.
   const mk = (label, title, run, { html = false } = {}) => {
     const b = document.createElement('button');
     b.type = 'button';

@@ -1,4 +1,13 @@
 <script>
+  // Picker.svelte — the no-folder-open landing screen.
+  //
+  // Single responsibility: let the user choose a book folder to open, either
+  // via the native folder dialog or by clicking a remembered recent. It owns
+  // only its local view state (the recents list + an error string); the
+  // actual open/persist logic lives in the stores. Once a folder opens the
+  // `ready` store flips and App.svelte unmounts this in favour of the shell.
+  //
+  // Mounted by App.svelte while `!ready`.
   import { onMount } from 'svelte';
   import { TAURI } from '../lib/tauri.js';
   import { pickFolder, openFolderPath, getRecents, removeRecent } from '../lib/stores.js';
@@ -6,20 +15,31 @@
   let recents = $state([]);
   let error = $state('');
 
+  /** Reload the recents list from the store. Each entry carries an `exists`
+   *  flag so the UI can show stale (deleted) folders as dimmed + unclickable
+   *  rather than hiding them silently. */
   async function refresh() { recents = await getRecents(); }
   onMount(refresh);
 
+  /** Open the native folder picker. pickFolder both prompts and opens the
+   *  chosen folder; a thrown error (e.g. unreadable folder) is surfaced
+   *  inline rather than crashing the screen. */
   async function onOpen() {
     error = '';
     try { await pickFolder(); }
     catch (e) { error = 'Could not read folder: ' + e; }
   }
+  /** Re-open a remembered folder. No-op for entries the store already marked
+   *  missing. If the folder vanished between scan and click, openFolderPath
+   *  returns false — show the error and refresh so the row flips to missing. */
   async function onRecent(path, exists) {
     if (!exists) return;
     error = '';
     const ok = await openFolderPath(path);
     if (!ok) { error = 'Folder no longer exists.'; await refresh(); }
   }
+  /** Drop a folder from recents. stopPropagation keeps the parent row's
+   *  click (which would try to OPEN the folder) from firing on the ✕. */
   async function onRemove(path, ev) {
     ev.stopPropagation();
     await removeRecent(path);
@@ -29,7 +49,7 @@
 
 <div class="picker-screen">
   <div class="picker-hero">
-    <h1 class="picker-title">MD Reader</h1>
+    <h1 class="picker-title">FenceyMD</h1>
     <p class="picker-tagline">A calm space for your local Markdown library.</p>
   </div>
 
@@ -74,6 +94,6 @@
   </div>
 
   {#if !TAURI}
-    <p class="picker-hint">ⓘ Folder access requires the MD Reader desktop application for secure file system hooks.</p>
+    <p class="picker-hint">ⓘ Folder access requires the FenceyMD desktop application for secure file system hooks.</p>
   {/if}
 </div>

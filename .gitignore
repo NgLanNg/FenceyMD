@@ -39,3 +39,6 @@ vault/
 
 # OS junk
 Thumbs.db
+
+# stray top-level build/test output
+target/

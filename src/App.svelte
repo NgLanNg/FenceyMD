@@ -1,4 +1,27 @@
 <script>
+  // App.svelte — root component / application shell.
+  //
+  // Single responsibility: decide WHICH top-level view is on screen and host
+  // the always-on, view-independent chrome around it. It does not own any
+  // document/library data — that lives in the stores under ./lib/stores.
+  //
+  // Two-state shell, gated on the `ready` store:
+  //   • !ready  → <Picker> (no folder open: open-folder / recents screen)
+  //   • ready   → app shell: <Sidebar> + (<Reader> | <Library>),
+  //               plus the singleton <Settings> and <CrossSearchPanel>.
+  //
+  // Collaborators:
+  //   • stores.js / stores/* — folder lifecycle (openLast, openScanResult),
+  //     routing (route), nav layout (navCollapsed/navOpen), the filesystem
+  //     watcher (setupWatcherListener), and cross-search state.
+  //   • Child views (Picker, Sidebar, Library, Reader, Settings) own their
+  //     own data + focus; App only routes between them.
+  //
+  // Invariants / assumptions a maintainer must know:
+  //   • Global keyboard shortcuts that must fire from ANY view are owned
+  //     here (one listener), not duplicated per child — see onAppKey.
+  //   • `isMobile` is local UI state derived from viewport width; the
+  //     mobile nav drawer (navOpen) is force-closed when leaving mobile.
   import { onMount } from 'svelte';
   import { TAURI } from './lib/tauri.js';
   import {
@@ -19,6 +42,13 @@
 
   let isMobile = $state(false);
 
+  /**
+   * Recompute `isMobile` from the current viewport width (<=768px).
+   * Called on mount and on every matchMedia/resize event. Only mutates
+   * state when the breakpoint actually crosses, to avoid redundant
+   * reactive churn. Leaving mobile force-closes the mobile nav drawer so
+   * it can't linger off-screen on the desktop layout.
+   */
   function syncMobile() {
     const next = window.innerWidth <= 768;
     if (next !== isMobile) {
@@ -27,6 +57,9 @@
     }
   }
 
+  // Boot sequence: wire viewport listeners, start the filesystem watcher,
+  // then decide the initial view (test fixture / reopen-last / Home). The
+  // returned function is the onMount cleanup — it tears down the listeners.
   onMount(async () => {
     syncMobile();
     // Use both matchMedia and resize so it works across browsers + emulation.
@@ -35,6 +68,76 @@
     window.addEventListener('resize', syncMobile);
 
     await setupWatcherListener();
+    // ROADMAP integration: listen for the `mcp-navigate` event from
+    // the Rust MCP server. When an agent calls `open_file("path")`
+    // over JSON-RPC, Rust emits this with the relative path; we
+    // route to the chapter the same way the user clicking a link does.
+    // Tauri-only — in browser mode the listener is a no-op.
+    if (TAURI) {
+      const { listen } = await import('./lib/tauri.js');
+      const { goChapter, mcpSessionContext, openScanResult } = await import('./lib/stores.js');
+      const unlisten = await listen('mcp-navigate', (e) => {
+        const path = e?.payload;
+        if (typeof path === 'string' && path.length) {
+          try { goChapter(path); }
+          catch (err) { console.warn('[mcp] goChapter failed:', err); }
+        }
+      });
+      // Listen for `mcp:session-context` so the Svelte store mirrors
+      // whatever the Rust side stashed. Phase 2's sidebar chat will
+      // read this store to know which agent+session to spawn.
+      const unlistenCtx = await listen('mcp:session-context', (e) => {
+        const ctx = e?.payload;
+        if (ctx && typeof ctx === 'object' && typeof ctx.agent === 'string') {
+          mcpSessionContext.set(ctx);
+        }
+      });
+      // Listen for `mcp-folder-changed` so the auto-resolver can
+      // swap the user's book to a recent folder that contains an
+      // absolute path the agent asked for. Without this, the user
+      // would see "Content not available" in the reader — the file
+      // is on disk, the active folder switched in Rust, but the JS
+      // `folderMeta` store still holds the old folder's file list.
+      // We re-scan the new folder, populate the stores, THEN call
+      // goChapter with the navigate path. The combined event
+      // payload is { root, nav_path } so we don't race the navigate
+      // against the async rescan.
+      const unlistenFolder = await listen('mcp-folder-changed', async (e) => {
+        const p = e?.payload;
+        if (!p || typeof p !== 'object') return;
+        const { root, nav_path } = p;
+        if (typeof root !== 'string' || !root.length) return;
+        try {
+          const { invoke } = await import('./lib/tauri.js');
+          const { get } = await import('svelte/store');
+          const { folderMeta } = await import('./lib/stores.js');
+          const scan = await invoke('scan_path', { path: root });
+          await openScanResult(scan);
+          // openScanResult sets route to 'home'; now navigate to
+          // the chapter the agent asked for. The Rust-side
+          // `nav_path` is the full relative path; the renderer's
+          // item.path is group-stripped (e.g. `README.md` not
+          // `desktop-app/README.md`), so we have to look up the
+          // matching folderMeta item by `diskPath` and use its
+          // `path` for routing. Without this, the user lands on
+          // the chapter's title (because the route is set) but
+          // the body lookup misses and the reader shows
+          // "Content not available."
+          if (typeof nav_path === 'string' && nav_path.length) {
+            const meta = get(folderMeta);
+            const item = meta.find((f) => f.diskPath === nav_path);
+            const routePath = item?.path || nav_path;
+            goChapter(routePath);
+          }
+        } catch (err) {
+          console.warn('[mcp] folder-change rescan failed:', err);
+        }
+      });
+      // Cleanup is handled by the Svelte runtime when the component
+      // unmounts; Tauri listeners are tied to the window lifetime
+      // so leaking is fine here.
+      void unlisten; void unlistenCtx; void unlistenFolder;
+    }
 
     const params = new URLSearchParams(location.search);
     if (params.get('test') === '1') {
@@ -53,6 +156,11 @@
     };
   });
 
+  // Load an in-memory sample book (no filesystem) when launched with
+  // ?test=1. Each `with*` helper returns a markdown string exercising one
+  // renderer feature (slides, mermaid, html/svg fences, math, code, csv,
+  // excalidraw); openScanResult feeds them through the normal open path so
+  // every view renders real content for screenshots / manual QA.
   async function loadTestData() {
     const sample = (t, b) => `# ${t}\n\n${b}\n\n## A subsection\n\nSome _italic_ and **bold** text, a [link](https://example.com), and code:\n\n\`\`\`js\nconst x = 42;\nconsole.log(x);\n\`\`\`\n\n- one\n- two\n- three\n`;
     const withSlides = (t, b) => `# ${t}\n\n${b}\n\n## A subsection\n\nSome _italic_ and **bold** text, a [link](https://example.com), and code:\n\n\`\`\`js\nconst x = 42;\nconsole.log(x);\n\`\`\`\n\n---\n\n## Key Takeaways\n\n- one\n- two\n- three\n\n---\n\n## What's Next\n\nThis chapter has \`---\` separators, so the slide view is available.\n\n---\n\n## Live SVG\n\nBelow is a live SVG. The reader renders the graphic itself.\n\n\`\`\`svg\n<svg viewBox=\"0 0 200 80\" xmlns=\"http://www.w3.org/2000/svg\">\n  <rect x=\"2\" y=\"2\" width=\"196\" height=\"76\" rx=\"8\" fill=\"#f0f1f0\" stroke=\"#9a9aa0\"/>\n  <circle cx=\"40\" cy=\"40\" r=\"22\" fill=\"#c25c4a\"/>\n  <text x=\"100\" y=\"46\" font-family=\"serif\" font-size=\"20\" fill=\"#242428\">live svg</text>\n</svg>\n\`\`\`\n\n---\n\n## Live HTML\n\nBelow is a live HTML block. Real DOM, not source.\n\n\`\`\`html\n<div style=\"display:flex;gap:12px;align-items:center;font-family:sans-serif\">\n  <span style=\"width:36px;height:36px;border-radius:50%;background:#c25c4a\"></span>\n  <strong>HTML block</strong>\n  <em style=\"color:#54545c\">rendered, not shown</em>\n</div>\n\`\`\`\n`;
@@ -100,7 +208,7 @@
       folder_name: 'sample-book',
       root: 'sample-book',
       files: [
-        { path: 'README.md', name: 'README.md', content: `# MD Reader — Tour Book\n\nThis folder is a tour of the app. Open it in MD Reader and the\nsidebar will show eight chapters. Read them in order, or jump to\nthe one you need.\n\nStart with **00-welcome.md** — it walks you through the rest.\n` },
+        { path: 'README.md', name: 'README.md', content: `# FenceyMD — Tour Book\n\nThis folder is a tour of the app. Open it in FenceyMD and the\nsidebar will show eight chapters. Read them in order, or jump to\nthe one you need.\n\nStart with **00-welcome.md** — it walks you through the rest.\n` },
         { path: 'part-i/00-welcome.md', name: '00-welcome.md', content: sample('Welcome', 'The opening chapter of the sample book.') },
         { path: 'part-i/01-reading.md', name: '01-reading.md', content: sample('Reading', 'The reading experience — typography, fonts, dark mode.') },
         { path: 'part-i/02-navigation.md', name: '02-navigation.md', content: sample('Navigation', 'Sidebar, library, recents, keyboard shortcuts.') },
@@ -118,6 +226,10 @@
     });
   }
 
+  // Build the shell's class list from layout state: `mobile` swaps to the
+  // drawer layout, `nav-collapsed` (desktop) hides the sidebar, `nav-open`
+  // (mobile) reveals the drawer. The desktop/mobile flags are mutually
+  // exclusive so collapsed and open never apply together.
   function shellClass() {
     let c = 'app-shell';
     if (isMobile) c += ' mobile';
@@ -130,6 +242,8 @@
   // cross-chapter search panel. We mount this on App.svelte so the
   // shortcut works from any view (Picker / Library / Reader / Settings)
   // and is a single listener, not one per child.
+  // Bound to <svelte:window onkeydown>; preventDefault stops the browser's
+  // own ⌘⇧F so only the panel toggle fires.
   function onAppKey(e) {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) {

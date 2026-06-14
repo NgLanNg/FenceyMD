@@ -1,8 +1,8 @@
-# MD Reader: Tour Book
+# FenceyMD: Tour Book
 
-This folder is a tour of the app. **Open it in MD Reader** and
-the sidebar will show ten chapters. Read them in order, or jump
-to the one you need.
+This folder is a tour of the app. **Open it in FenceyMD** and
+the sidebar will show fourteen chapters. Read them in order, or
+jump to the one you need.
 
 ## The chapters
 
@@ -18,9 +18,15 @@ to the one you need.
 | 07 | [Diagrams](07-mermaid.md) | Mermaid fenced blocks |
 | 08 | [Drawing with Excalidraw](08-excalidraw.md) | Interactive scenes, edit-in-app |
 | 09 | [Exporting to PDF](09-pdf.md) | One-click chapter PDF |
+| 10 | [Math](10-math.md) | KaTeX inline + display math |
+| 11 | [Code](11-code.md) | Shiki-rendered fenced blocks, language labels |
+| 12 | [CSV](12-csv.md) | Inline tables from `csv` fences |
+| 13 | [Agent Control](13-agent-control.md) | The local MCP server: 7 tools, native bridge, no network |
 
 The first one to read is **00-welcome.md**. It walks you
-through the rest.
+through the rest. **13-agent-control.md** is the chapter the
+rest of the book was written for — if you only read one extra
+chapter, read that one.
 
 ## How to open this folder
 

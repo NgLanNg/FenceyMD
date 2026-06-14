@@ -1,12 +1,23 @@
-# MD Reader — Roadmap (v1.1 and beyond)
+# FenceyMD — Roadmap (v1.1 and beyond)
 
 `PLAN.md` is the v1.0 plan (Phases 1–5, complete). This file is
 what's next. The v1.1 cut below is the work that's queued for the
 next release cycle; "v2" is the conversation after that.
 
+> **Status, June 2026:** **Phase 1 of AI-agent integration has
+> shipped.** The local MCP server (axum + tokio) runs in the
+> `.app`, exposes five tools, and is verified end-to-end against
+> the live desktop bundle. Bridge script ships
+> (`scripts/mcp-bridge.mjs`, 160 lines, no deps), tested with
+> 10/10 unit + integration tests. Five agents are wired
+> (`docs/AGENT_REGISTRATION.md`). Port file cleanup on graceful
+> close + stale-detection on startup. Phase 2 (in-app sidebar
+> chat) and v2 (anchor-based edit) are designed in
+> `vault/plan/20260613_*_design.md` but not built.
+
 ## The brand line (read first)
 
-> *MD Reader is a calm, local, native desktop app for reading and
+> *FenceyMD is a calm, local, native desktop app for reading and
 > lightly editing long-form Markdown books. No account, no network,
 > no telemetry, no page-level interactivity.*
 
@@ -87,7 +98,7 @@ These are the bigger lifts. They depend on the v1.1 foundation.
 | 24 | Highlights + notes per paragraph | L | 4 colors, side gutter, per-folder store. |
 | 25 | Tabs / multi-window / multi-book | L | Different feel, but unlocks "draft vs published" workflows. |
 | 26 | **AI integration: anchor-based edit** | XL | The future vision. The user points at a block (paragraph, mermaid node, math equation, CSV cell); the anchor is captured; an agent (CLI / IPC / external) returns a surgical diff for that anchor; the editor applies it. Foundation = #22 + #23. The agent surface is "a CLI / IPC endpoint that takes (file, anchor, new_content) and applies the diff". The agent itself can be local subprocess, remote HTTP, or a future in-app chat — the architecture doesn't care. |
-| 27 | Per-project config (`.mdreader.toml`) | M | Per-book overrides (theme, fonts, renderers enabled). |
+| 27 | Per-project config (`.fenceymd.toml`) | M | Per-book overrides (theme, fonts, renderers enabled). |
 | 28 | EPUB export | L | The "other format" the parking lot called out. |
 
 ### How #26 is shaped by #22 + #23

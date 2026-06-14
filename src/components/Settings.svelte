@@ -143,7 +143,7 @@
       {/if}
 
       <div class="settings-foot">
-        <span class="settings-build">MD Reader · v1.0.0 · Local-only</span>
+        <span class="settings-build">FenceyMD · v1.0.0 · Local-only</span>
         <button class="btn-primary" onclick={close}>Done</button>
       </div>
     </div>

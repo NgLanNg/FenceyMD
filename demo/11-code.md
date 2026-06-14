@@ -68,7 +68,7 @@ find . -name "*.md" -mtime -7 -not -path "./node_modules/*"
 
 ```json
 {
-  "name": "md-reader",
+  "name": "fenceymd",
   "version": "1.0.0",
   "features": ["math", "syntax-highlight", "slides", "pdf"]
 }

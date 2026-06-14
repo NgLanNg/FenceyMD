@@ -44,7 +44,7 @@ const jsRows = Object.entries(js).map(([name, info]) => {
 // cargo metadata output is large (hundreds of packages); write to a
 // temp file and read, since piping straight into the shell hits
 // ENOBUFS in some environments.
-const tmpDir = mkdtempSync(join(tmpdir(), 'mdreader-lic-'));
+const tmpDir = mkdtempSync(join(tmpdir(), 'fenceymd-lic-'));
 const tmpFile = join(tmpDir, 'cargo-meta.json');
 try {
   run(`cd ${ROOT}/src-tauri && cargo metadata --format-version=1 --offline > ${tmpFile} 2>/dev/null || cargo metadata --format-version=1 > ${tmpFile} 2>/dev/null`);
@@ -103,7 +103,7 @@ function tallyTable(tallyRows, total) {
 
 const md = `# Third-Party Licenses
 
-MD Reader (MIT) is built on top of open-source dependencies from
+FenceyMD (MIT) is built on top of open-source dependencies from
 the npm and Cargo ecosystems. This file is the human-readable
 summary; the per-dependency table is in
 [THIRD-PARTY-LICENSES.csv](./THIRD-PARTY-LICENSES.csv).
@@ -147,7 +147,7 @@ ${cargoNotable.length ? `### Cargo (${cargoNotable.length})\n\n| Crate | Version
 \`elkjs@0.9.3\` (npm) — the layout engine mermaid uses for some
 diagram types. EPL-2.0 is a weak copyleft: source-level
 modifications to elkjs itself must be released, but merely
-distributing MD Reader (which links elkjs via mermaid) is fine.
+distributing FenceyMD (which links elkjs via mermaid) is fine.
 The dep is loaded lazily, so a chapter without a mermaid diagram
 never pulls it in.
 

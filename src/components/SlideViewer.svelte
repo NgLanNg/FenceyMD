@@ -1,4 +1,37 @@
 <script>
+  // ============================================================================
+  // SlideViewer.svelte — full-screen Marp slide-deck reader.
+  //
+  // Single responsibility: take a raw markdown chapter, turn it into a Marp
+  // deck, and present it as a horizontally-scrolling, fit-to-stage slideshow
+  // with keyboard + on-screen navigation. This is the *presentation* surface;
+  // it owns none of the parsing or fence-rendering logic itself.
+  //
+  // Collaborators (the heavy lifting lives elsewhere — keep it that way):
+  //   - lib/slides.js          splitIntoSlides(): chapter markdown -> slide srcs
+  //   - lib/registry.js        dispatch(): fence-type -> renderer (svg/html/
+  //                            mermaid/excalidraw/math/shiki). Shared with the
+  //                            reader + PDF paths, so fence behavior stays
+  //                            consistent across all three views.
+  //   - lib/renderers/index.js side-effect import that registers the core
+  //                            renderers into the registry at module init.
+  //   - lib/anchors.js         stampSlides(): stable data-md-anchor addresses.
+  //   - lib/diagram-export.js  addDiagramTools(): export controls on diagrams.
+  //   - @marp-team/marp-core   Marpit engine, dynamic-imported on first open.
+  //
+  // Key invariants / assumptions for maintainers:
+  //   - All slides are rendered ONCE up-front (single Marp call) into a hidden
+  //     host, then shown via CSS transform. Navigation never re-renders — this
+  //     is what makes arrow-key paging instant. `slideSvgs` is therefore write-
+  //     once (set in onMount); `current` is the only per-nav reactive state.
+  //   - The markdown is UNTRUSTED. Marp produces the slide HTML and we inject
+  //     it via {@html}; the registry renderers are the trust boundary that
+  //     sanitize raw svg/html fences. SlideViewer must not relax that — it
+  //     passes fences straight to `dispatch` rather than hand-rolling any HTML.
+  //   - Native slide geometry is fixed at 1280x720 (Marp's 16:9 default).
+  //     Fitting is pure sizing (no JS scale transform); see fitToStage().
+  // ============================================================================
+  //
   // Slide deck view powered by Marp (https://marp.app).
   //
   // Markdown semantics: a `---` horizontal rule splits slides. Marp
@@ -34,8 +67,15 @@
   // a specific slide by a stable address.
   import { stampSlides } from '../lib/anchors.js';
 
+  // Props:
+  //   markdown — raw chapter source (untrusted; see header trust note).
+  //   onExit   — optional callback fired when the user leaves slide view
+  //              (Esc key or the close button). Owner restores its prior view.
   let { markdown = '', onExit } = $props();
 
+  // Slide *source* strings, derived purely from markdown. Drives the counter
+  // and dots immediately, even before Marp has finished rendering the SVGs —
+  // so the nav bar shows the right slide count during the loading state.
   const slides = $derived(splitIntoSlides(markdown));
   let current = $state(0);
   let stageEl;
@@ -50,8 +90,11 @@
   // render all slides up-front (one Marp call), then use CSS
   // transform to show only the current one. This makes slide
   // navigation instant — no re-render on arrow keys.
+  // Write-once after onMount: holds the rendered per-slide SVG markup. Set
+  // exactly once (never on navigation) to preserve the "render-once" invariant.
   let slideSvgs = $state([]); // array of { html, width, height }
   let slideEls = [];        // array of DOM nodes, one per slide (filled on mount)
+  // True once the deck has been rendered; gates the loading/error UI vs. track.
   let rendered = $derived(slideSvgs.length > 0);
 
   // Marp's default slide is 1280×720 (16:9). Fit-to-stage scales
@@ -60,6 +103,21 @@
   const SLIDE_H = 720;
 
   // Re-fit whenever the stage resizes or the slide changes.
+  //
+  // $effect deps: `current` (read via `void current` so the effect re-runs on
+  // every navigation even though fitToStage doesn't take it as an arg) and
+  // `rendered` (read in the `if`). The `void` is load-bearing: without an
+  // explicit read, Svelte wouldn't track `current` and the effect would only
+  // fire on the rendered->true transition, leaving off-screen slides unsized
+  // after the user pages to them.
+  //
+  // Reactivity hazard: fitToStage() only mutates DOM/CSS custom properties and
+  // element styles — it reads and writes NO $state. That's deliberate; if it
+  // ever set a tracked rune here it would re-trigger this same effect and loop.
+  // Keep layout side effects out of reactive state.
+  //
+  // tick() waits for the {#each} to (re)bind slideEls, then rAF defers the
+  // measure to after the browser has laid out, so clientWidth/Height are real.
   $effect(() => {
     void current;
     if (rendered) {
@@ -67,6 +125,10 @@
     }
   });
 
+  // One-shot render pipeline: wire up resize listeners, lazy-load Marp, render
+  // the entire deck once, post-process its fences through the registry, stamp
+  // anchors, and publish the per-slide SVGs into `slideSvgs`. Any failure is
+  // caught and surfaced via `marpError` (the only error UI this component has).
   onMount(async () => {
     if (typeof ResizeObserver !== 'undefined' && stageEl) {
       resizeObserver = new ResizeObserver(() => fitToStage());
@@ -216,6 +278,12 @@
     ));
   }
 
+  /** Size and center the deck to the current stage dimensions. Pure DOM/CSS
+   *  side effect — reads stage clientWidth/Height and writes CSS custom props
+   *  + per-slide element styles. Reads/writes NO reactive $state (see the
+   *  $effect hazard note above). Safe to call any number of times; no-ops if
+   *  the stage/track refs aren't bound yet or the stage has zero area (e.g.
+   *  while hidden). */
   function fitToStage() {
     if (!stageEl || !trackEl) return;
     const cw = stageEl.clientWidth;
@@ -244,6 +312,10 @@
     }
   }
 
+  // Navigation primitives. Each clamps against the `slides` bounds (not
+  // `slideSvgs`) so paging stays valid during the brief loading window before
+  // the SVGs land; advancing `current` is what the show-only-current CSS reacts
+  // to, and what re-runs the fit $effect.
   function next() {
     if (current < slides.length - 1) current++;
   }
@@ -252,8 +324,13 @@
   }
   function first() { current = 0; }
   function last() { current = slides.length - 1; }
+  /** Leave slide view by invoking the owner-supplied callback (no-op if the
+   *  parent didn't pass one). */
   function exit() { onExit?.(); }
 
+  /** Window-level keyboard handler for deck navigation (arrows/space/PageUp-
+   *  Down/Home/End) and exit (Esc). Bound on <svelte:window>, so it fires
+   *  globally — hence the early-out below for text inputs. */
   function onKey(e) {
     // Don't intercept while user is typing in a search/editor field.
     const t = e.target;

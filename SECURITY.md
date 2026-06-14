@@ -16,11 +16,11 @@ not patched.
 
 **Please don't open a public issue for security problems.**
 
-Email **security@mdreader.app** (PGP key below) with:
+Email **security@fenceymd.app** (PGP key below) with:
 
 1. A short description of the issue
 2. Steps to reproduce (preferably a minimal chapter that triggers it)
-3. The MD Reader version + OS + Tauri version, if known
+3. The FenceyMD version + OS + Tauri version, if known
 4. Your assessment of impact (RCE? arbitrary file read? UI spoofing?)
 5. Whether you intend to disclose publicly and on what timeline
 
@@ -45,7 +45,7 @@ disclosure date with you — default is 90 days from the report.
 
 ## What is *not* a security issue
 
-- "I can read my own files." MD Reader is a local app; the
+- "I can read my own files." FenceyMD is a local app; the
   chosen folder is fully readable by design.
 - "The app doesn't validate Markdown." It's the user's own
   content; the renderer trusts the file.
@@ -53,7 +53,7 @@ disclosure date with you — default is 90 days from the report.
 
 ## Scope notes
 
-- **No network.** MD Reader makes no network calls at runtime.
+- **No network.** FenceyMD makes no network calls at runtime.
   If you observe one, that's a security issue.
 - **No telemetry.** Nothing leaves the app.
 - **Writes stay in the chosen folder.** The `write_file` and
@@ -63,7 +63,7 @@ disclosure date with you — default is 90 days from the report.
 
 ## PGP
 
-A public key for `security@mdreader.app` will be published
+A public key for `security@fenceymd.app` will be published
 alongside the first signed release. Until then, the email
 itself is the channel — GitHub does not require PGP for
 disclosure workflows at this stage.

@@ -1,3 +1,20 @@
+/**
+ * Application entry point.
+ *
+ * Single responsibility: bootstrap the Svelte 5 app — pull in the global
+ * stylesheets the renderer pipeline depends on, install last-resort error
+ * capture, and mount the root <App> into #app.
+ *
+ * How it fits together:
+ *   - Side-effect CSS imports here are the *global* styles; per-feature
+ *     styles (shiki, mermaid, etc.) are injected by their own renderers.
+ *   - App.svelte owns all routing/state; this file does nothing after mount.
+ *   - dlog() writes to the in-app debug log (src/lib/debug-log.js), which is
+ *     the only crash trail visible inside the Tauri WKWebView shell.
+ *
+ * Key invariant: a DOM element with id="app" must exist in index.html before
+ * this module runs — mount() targets it directly and does not guard for null.
+ */
 import './app.css';
 import 'highlight.js/styles/github.css';
 // Katex CSS is required for math to render. Shiki injects its own styles
@@ -25,4 +42,6 @@ if (typeof window !== 'undefined') {
 
 const app = mount(App, { target: document.getElementById('app') });
 
+// The mounted app instance. Exported mainly so HMR / tooling can reach the
+// component handle; nothing in the app consumes this import.
 export default app;

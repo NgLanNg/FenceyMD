@@ -1,4 +1,4 @@
-# Build MD Reader for Windows (.msi + .exe/NSIS).
+# Build FenceyMD for Windows (.msi + .exe/NSIS).
 # Run this ON a Windows machine (PowerShell) — Tauri can't be cross-compiled from macOS.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
@@ -7,7 +7,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 
-Write-Host "MD Reader - Windows build" -ForegroundColor Cyan
+Write-Host "FenceyMD - Windows build" -ForegroundColor Cyan
 
 # 1. Prerequisites (check + hint; install manually if missing):
 #    - Microsoft Visual Studio C++ Build Tools (MSVC) + Windows SDK

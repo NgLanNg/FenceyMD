@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build MD Reader for Linux (.deb, .rpm, .AppImage).
+# Build FenceyMD for Linux (.deb, .rpm, .AppImage).
 # Run this ON a Linux machine (x86_64) — Tauri can't be cross-compiled from macOS.
 #
 #   chmod +x scripts/build-linux.sh && ./scripts/build-linux.sh
@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "▶ MD Reader — Linux build"
+echo "▶ FenceyMD — Linux build"
 
 # 1. System libraries (Debian/Ubuntu). On Fedora use the dnf block below.
 if command -v apt-get >/dev/null 2>&1; then

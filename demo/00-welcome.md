@@ -2,10 +2,10 @@
 title: Welcome
 ---
 
-# Welcome to MD Reader
+# Welcome to FenceyMD
 
 You're reading this inside the app right now. That is, in a sense,
-the point: **MD Reader turns any folder of `.md` files into a book**.
+the point: **FenceyMD turns any folder of `.md` files into a book**.
 
 There's nothing to install in the folder. No build step, no
 config. Drop a directory, get a sidebar, get a reader. The files
@@ -49,7 +49,7 @@ Three ways to move around:
 The progress bar at the top of the chapter remembers where you
 stopped. The app also remembers your last scroll position per
 file, your bookmarks, your font size, your light/dark mode. All
-local, all in `~/Library/Application Support/com.mdreader.app/`.
+local, all in `~/Library/Application Support/com.fenceymd.app/`.
 
 ---
 

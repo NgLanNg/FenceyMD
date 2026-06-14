@@ -14,17 +14,33 @@
 // in-Page thread for nothing.
 import { register } from '../registry.js';
 
+// Memoized lazy import of katex — keeps it out of the initial bundle until a
+// chapter actually contains math.
 let _katex = null;
 async function getKatex() {
   if (!_katex) _katex = (await import('katex')).default;
   return _katex;
 }
 
+// `$$…$$` block math, non-greedy across newlines so adjacent blocks don't
+// merge. Capture group 1 is the TeX source.
 const BLOCK = /\$\$([\s\S]+?)\$\$/g;
+// `$…$` inline math, single-line. The lookarounds guard the common false
+// positives that make naive `$…$` matching unusable on prose:
+//   (?<!\\)$  — a `\$` escape is literal currency, not a delimiter;
+//   $(?!\s)   — no space right after the opening `$` (rules out "$ 5");
+//   $(?!\d)   — no digit right after the closing `$` (rules out "$5.00").
 const INLINE = /(?<!\\)\$(?!\s)([^\n$]+?)(?<!\\)\$(?!\d)/g;
 
-// Collect `$…$` / `$$…$$` matches in `src`, returning them sorted by
-// start offset. Block matches shadow overlapping inline matches.
+/**
+ * Collect `$…$` / `$$…$$` matches in `src`, sorted by start offset.
+ *
+ * @param {string} src - Raw text-node value to scan.
+ * @returns {Array<{start:number,end:number,tex:string,display:boolean}>}
+ *   `display:true` for block math. Block matches are collected first and any
+ *   inline match falling inside a block's span is dropped — so the `$$` in a
+ *   `$$…$$` block is never mistaken for two inline delimiters.
+ */
 function collectMatches(src) {
   const matches = [];
   let m;
@@ -41,8 +57,20 @@ function collectMatches(src) {
   return matches;
 }
 
-// Build a DocumentFragment of plain text + katex-rendered spans. Returns
-// null when no math was found.
+/**
+ * Build a DocumentFragment interleaving the plain-text runs of `src` with
+ * katex-rendered `<span class="math-render">` spans.
+ *
+ * @param {string} src - The text-node value being replaced.
+ * @param {object} katex - The resolved katex module (caller pre-loads it).
+ * @returns {DocumentFragment|null} null when `src` contains no math, so the
+ *   caller can leave the original text node untouched.
+ *
+ * On a katex parse error the span is replaced with the verbatim source slice
+ * (delimiters included) so a malformed formula is visible and fixable rather
+ * than silently dropped. `throwOnError:false` covers most cases; the
+ * try/catch is the belt-and-braces guard for anything katex still throws on.
+ */
 function fragmentFromMath(src, katex) {
   const matches = collectMatches(src);
   if (!matches.length) return null;
@@ -69,6 +97,16 @@ function fragmentFromMath(src, katex) {
   return frag;
 }
 
+/**
+ * Find the text nodes under `area` that are eligible for math substitution.
+ *
+ * @param {Element} area - Chapter root to scan.
+ * @returns {Text[]} Text nodes containing at least one `$`, excluding those
+ *   inside code/markup or under a `[data-math-skip]` opt-out, and excluding
+ *   nodes already inside a rendered `.katex` subtree (so re-running enhance()
+ *   doesn't double-process). Collected up front rather than mutated during the
+ *   walk, since replacing nodes mid-traversal would invalidate the walker.
+ */
 function walk(area) {
   const walker = document.createTreeWalker(area, NodeFilter.SHOW_TEXT, null, false);
   const targets = [];
@@ -86,6 +124,9 @@ function walk(area) {
   return targets;
 }
 
+// Renderer def for math. Unlike the fence renderers it has no `block.pre`;
+// the registry triggers it explicitly (see enhance() in registry.js) because
+// math lives in text nodes spread through the chapter, not in a single fence.
 register('math', {
   kind: 'inline', // not a fence — operates on text nodes
   load() { return getKatex(); },
@@ -106,6 +147,15 @@ register('math', {
 
 // Exposed for the legacy `enhance()` path — the reader imports
 // `renderMathInArea` so the per-file enhance doesn't have to change.
+/**
+ * Walk `area` and substitute every `$…$`/`$$…$$` run with katex output, in
+ * place. Mirrors the registered renderer's body but is callable directly by
+ * legacy reader code that predates the registry. Idempotent: already-rendered
+ * `.katex` nodes are excluded by `walk()`, so re-running is safe.
+ *
+ * @param {Element} area - Chapter root to process.
+ * @returns {Promise<void>}
+ */
 export async function renderMathInArea(area) {
   const katex = await getKatex();
   const targets = walk(area);

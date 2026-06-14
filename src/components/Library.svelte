@@ -1,4 +1,33 @@
 <script>
+  /**
+   * Library.svelte — the app's browse surface.
+   *
+   * Single responsibility: render the read-only library view in one of two
+   * modes, selected purely by the shared `route` store:
+   *   • Library home   — a card grid of groups (+ a "Root files" card for
+   *                      ungrouped top-level files) and a "Recent Activity" rail.
+   *   • Group landing  — a chapter tree for the files in one group.
+   *
+   * Collaborators:
+   *   • stores.js   — owns all state (folderMeta/groupMeta/progressMap/route)
+   *                   and the navigation commands (goHome/goGroup/goChapter).
+   *                   This component never mutates that state directly; it only
+   *                   reads stores and calls those commands, so it stays a pure
+   *                   projection of store state.
+   *   • index.js    — buildFolderTree() shapes a flat file list into the nested
+   *                   tree TreeNode renders; labelFromName() prettifies filenames.
+   *   • TreeNode    — recursively renders one tree node (folder or chapter).
+   *
+   * Invariants / assumptions a maintainer must know:
+   *   • '__root' is a sentinel group id (not a real group key) meaning "the
+   *     ungrouped top-level files". groupMeta never contains a '__root' key.
+   *   • Progress is keyed by `diskPath || path`: prefer the absolute on-disk
+   *     path, falling back to the relative path for non-Tauri/web contexts.
+   *     Read keys must match the keys progress.js writes — keep both in sync.
+   *   • All derived values below are intentionally $derived (not $effect): this
+   *     view computes, it never writes back to a store, so there is no effect
+   *     and no risk of a read-what-you-write reactive loop.
+   */
   import { folderName, folderMeta, groupMeta, progressMap, route, goGroup, goHome, goChapter } from '../lib/stores.js';
   import { buildFolderTree, labelFromName } from '../lib/index.js';
   import TreeNode from './TreeNode.svelte';
@@ -7,9 +36,14 @@
   const ungrouped = $derived($folderMeta.filter((f) => !f.grouped));
   const totalFiles = $derived($folderMeta.length);
 
+  // Mode + current-group derivation, driven entirely by `route`. `currentGroup`
+  // is null on the home route, which is the flag the template branches on.
   const currentGroup = $derived($route.name === 'group' ? $route.group : null);
   const isRootGroup = $derived(currentGroup === '__root');
   const currentTitle = $derived(isRootGroup ? 'Root files' : currentGroup);
+  // '__root' resolves to the ungrouped files; a real group id indexes groupMeta.
+  // The `|| []` guards a stale route pointing at a group that no longer exists
+  // (e.g. after the folder was re-scanned), so the tree falls back to empty.
   const groupItems = $derived(
     isRootGroup ? ungrouped : currentGroup ? ($groupMeta[currentGroup] || []) : []
   );
@@ -19,6 +53,9 @@
   const bookmarks = $derived(
     $folderMeta.filter((f) => $progressMap[f.diskPath || f.path]?.bookmarked)
   );
+  // "In progress" = meaningfully started but not effectively finished. The
+  // 0.02/0.95 band trims noise: a few pixels of scroll isn't "started", and the
+  // last sliver isn't "still reading", so neither clutters the rail.
   const inProgress = $derived(
     $folderMeta
       .filter((f) => {
@@ -27,16 +64,36 @@
       })
       .slice(0, 4)
   );
+  // Bookmarks take precedence over in-progress; show at most 4 either way.
   const activity = $derived((bookmarks.length ? bookmarks : inProgress).slice(0, 4));
 
+  /**
+   * True if any item looks like a numbered chapter (e.g. "Ch.3", "ch12").
+   * Drives the "sorted by chapter" hint on group cards — purely cosmetic.
+   * @param {Array<{name: string}>} items
+   * @returns {boolean}
+   */
   function hasChapters(items) {
     return items.some((i) => /ch\.?(\d+)/i.test(i.name));
   }
+  /**
+   * Open a group card. Skips the group landing for single-file groups by
+   * jumping straight into the chapter, which spares the user a dead-end page
+   * that holds exactly one link.
+   * @param {string} g group id (a real key of groupMeta)
+   */
   function openGroup(g) {
     const items = $groupMeta[g] || [];
     if (items.length === 1) goChapter(items[0].path);
     else goGroup(g);
   }
+  /**
+   * Reading progress for an item as a whole-number percent (0–100).
+   * Uses the same `diskPath || path` key as progress.js; missing entries read
+   * as 0%.
+   * @param {{diskPath?: string, path: string}} item
+   * @returns {number}
+   */
   function pct(item) {
     return Math.round(($progressMap[item.diskPath || item.path]?.scroll || 0) * 100);
   }

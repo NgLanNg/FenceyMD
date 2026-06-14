@@ -17,6 +17,13 @@
 
   // Subscribe to the module-level state. Svelte's $effect tracks the
   // returned cleanup function.
+  //
+  // Hazard note: this effect has NO reactive deps — it reads/writes `entry`
+  // only inside the subscribe callback, not in the effect body — so it runs
+  // exactly once (mount) and tears down on unmount. That's deliberate: the
+  // subscription, not Svelte reactivity, is what drives `entry`. The
+  // `wasOpen` snapshot is taken before the assignment so we can detect the
+  // closed→open edge and move the node in only on that transition.
   $effect(() => {
     return subscribe((next) => {
       const wasOpen = !!entry;
@@ -36,12 +43,18 @@
     });
   });
 
+  /** Close only when the click lands on the backdrop itself, not on the
+   *  zoomed content bubbling up — hence the target === currentTarget guard. */
   function onBackdropClick(e) {
     if (e.target === e.currentTarget) closeZoom();
   }
+  /** Esc closes the overlay. Gated on `entry` so the global listener is a
+   *  no-op while nothing is zoomed. */
   function onKeydown(e) {
     if (e.key === 'Escape' && entry) closeZoom();
   }
+  // Esc is bound at the window level (not on the overlay) so it works
+  // regardless of focus; cleanup removes it on unmount.
   onMount(() => {
     window.addEventListener('keydown', onKeydown);
     return () => window.removeEventListener('keydown', onKeydown);

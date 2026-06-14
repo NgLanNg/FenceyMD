@@ -18,12 +18,27 @@
 // match against any cell in the row). Empty input = show all rows.
 import { register } from '../registry.js';
 
+// Memoized papaparse module — the dynamic import only runs the first
+// time a ```csv fence is rendered, then every later call reuses it.
 let _papaparse = null;
+
+/**
+ * Lazily import + cache the papaparse default export.
+ * @returns {Promise<object>} the papaparse module.
+ */
 async function getPapa() {
   if (!_papaparse) _papaparse = (await import('papaparse')).default;
   return _papaparse;
 }
 
+/**
+ * Build a `<td>` from a raw cell value. `textContent` (never innerHTML)
+ * is the trust boundary here: CSV cells are untrusted markdown content,
+ * so they are inserted as text and never parsed as HTML.
+ *
+ * @param {*} text — raw cell value; null/undefined render as empty.
+ * @returns {HTMLTableCellElement}
+ */
 function cell(text) {
   const td = document.createElement('td');
   td.textContent = text == null ? '' : String(text);
@@ -38,6 +53,9 @@ function cell(text) {
 //   - percent: 12.5%
 // Rejects anything with a non-numeric suffix (so a year like "1995"
 // parses as 1995, but a language name "Go" doesn't).
+//
+// @param {*} raw — raw cell value.
+// @returns {number|null} the parsed Number, or null if it isn't numeric.
 function parseNumericLoose(raw) {
   if (raw == null) return null;
   const s = String(raw).trim();
@@ -51,6 +69,10 @@ function parseNumericLoose(raw) {
 
 // Format a number with thousand separators. Reuses the raw text if
 // parsing failed so we don't garble the cell.
+//
+// @param {*} raw — raw cell value.
+// @returns {string} the en-US grouped number, or the original text
+//   unchanged when `raw` doesn't parse as numeric.
 function formatNumeric(raw) {
   const n = parseNumericLoose(raw);
   if (n == null) return raw == null ? '' : String(raw);
@@ -63,6 +85,11 @@ function formatNumeric(raw) {
 
 // For each column in the data rows, decide if it's "numeric enough"
 // (≥80% of non-empty cells parse as Number). Returns Set<number>.
+//
+// @param {Array<Array<*>>} rows — parsed CSV; row 0 is the header and is
+//   excluded from the ratio. Empty cells don't count toward the total.
+// @returns {Set<number>} 0-based indices of the numeric columns. Empty
+//   when there are fewer than 2 rows (header alone proves nothing).
 function detectNumericColumns(rows) {
   if (rows.length < 2) return new Set();
   const headerLen = (rows[0] || []).length;
@@ -80,6 +107,21 @@ function detectNumericColumns(rows) {
   return numeric;
 }
 
+// Registry manifest entry for ```csv fences. `render` mutates the DOM in
+// place per the registry contract — it replaces `block.pre` with the
+// editorial `.csv-block` wrapper and returns nothing.
+//
+// Two paths:
+//   - PDF (ctx.isPdf): synchronous source-preserving fallback; papaparse
+//     never runs in the Rust print pipeline (see header).
+//   - Live reader: `render` returns immediately and the table is built
+//     inside the `getPapa().then(...)`. The `pre.replaceWith(wrap)` is
+//     therefore deferred until the parse resolves — callers must not
+//     assume the DOM is swapped by the time `render` returns.
+//
+// `block` = { pre, body, ... } (registry block shape); `ctx` supplies
+// `isPdf` and the wrapper-class overrides. A failed parse/import is
+// caught and degrades to the same raw-source fallback as the PDF path.
 register('csv', {
   kind: 'fence',
   load() { return getPapa(); },
