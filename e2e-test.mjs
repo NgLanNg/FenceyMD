@@ -1096,6 +1096,51 @@ anchorOk
   }
 }
 
+// ── 34. Reader keyboard shortcuts: ⌘F focuses find, `e` enters edit ───────
+// The README and the in-app cheatsheet both claim "⌘F in-chapter search"
+// and "e to edit". Those two were documented but never wired in the
+// Reader's onKey handler (only ←/→, ⌘P, ⌘⇧S, gg/G, ? were). This guards
+// that they actually fire. We drive the chapter view (not slide/editor),
+// since onKey bails early in those modes.
+{
+  // Land on a normal chapter (welcome) in reader mode.
+  await page.evaluate(() => {
+    const items = [...document.querySelectorAll('.sidebar-chapter')];
+    const first = items.find((it) => /welcome/i.test(it.textContent)) || items[0];
+    first?.click();
+  });
+  await new Promise(r => setTimeout(r, 500));
+
+  // ⌘F (Ctrl+F — the handler accepts metaKey || ctrlKey) should move focus
+  // into the "Find in chapter" input. Make sure focus starts off the input.
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyF');
+  await page.keyboard.up('Control');
+  await new Promise(r => setTimeout(r, 150));
+  const findFocused = await page.evaluate(() =>
+    document.activeElement?.getAttribute?.('aria-label') === 'Search in chapter');
+
+  // Blur the find input, then `e` should enter raw-markdown edit mode.
+  // (The INPUT guard in onKey would otherwise swallow the bare key.)
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await new Promise(r => setTimeout(r, 100));
+  await page.keyboard.press('KeyE');
+  const editorMounted = await page.waitForSelector('.notion-editor-inner .ProseMirror', { timeout: 3000 })
+    .then(() => true).catch(() => false);
+
+  if (findFocused && editorMounted) {
+    pass('Reader shortcuts: ⌘F focuses find box, `e` opens the editor');
+  } else {
+    fail('Reader shortcuts', `⌘F-focused-find=${findFocused} e-opened-editor=${editorMounted}`);
+  }
+  // Leave the editor so teardown / replays start clean.
+  if (editorMounted) {
+    await page.click('button.btn-ghost').catch(() => {});
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+
 await browser.close();
 
 const failed = results.filter(r => r[0] === 'FAIL');

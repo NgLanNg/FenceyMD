@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Keyboard shortcuts `⌘F` and `e` now actually work.** The README and the
+  in-app cheatsheet both advertised `⌘F` (focus in-chapter find) and `e`
+  (enter edit mode), but neither was wired in the Reader's `onKey` handler —
+  only `←`/`→`, `⌘P`, `⌘⇧S`, `gg`/`G`, and `?` were. `⌘F` now focuses (and
+  selects) the "Find in chapter" box (intercepting the browser's native find
+  bar), `e` opens the editor (guarded by `canEdit`), and `Esc` clears an
+  active search even when the find box isn't focused. New e2e test 34 guards
+  both shortcuts.
+
 - **Folder scan no longer walks dependency/build trees.** `scan_folder` now
   prunes `node_modules`, `target`, `dist`, `build`, and hidden dirs from the
   walk (`WalkDir::filter_entry`). Opening a folder containing `node_modules`
@@ -35,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `live_endpoint_falls_back_to_sibling_when_bare_pid_dead`).
 
 ### Changed
+- **PDF/print code split out of `main.rs` into `pdf.rs`.** The ~815-line PDF
+  cluster (`print_pdf` command, `build_print_html`, `transform_for_pdf`,
+  `find_chrome`, the renderer-manifest loader, the KaTeX-CSS reader, and the
+  HTML/escape helpers) now lives in its own module. `main.rs` drops from 2675
+  to ~1860 lines. No behavior change — only `print_pdf` and the three
+  test-exercised helpers cross the module boundary (`pub(crate)`); everything
+  else is private to `pdf.rs`. All 70 Rust unit tests + 2 bridge tests still
+  pass.
+
 - **CLI install targets on-PATH dirs only.** The `fenceymd` symlink now installs
   only into `/opt/homebrew/bin` or `/usr/local/bin` (both on macOS's PATH),
   dropping the `~/.local/bin`/`~/bin` fallbacks — those aren't on the default
