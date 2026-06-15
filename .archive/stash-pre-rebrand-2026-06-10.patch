@@ -1,0 +1,1509 @@
+# Stash unique work NOT in v1.1.0
+# Total: 13 files with unique hunks
+# Stash base: f7a9b73 (merge commit from 2026-06-10)
+
+================================================================================
+
+diff --git a/e2e-test.mjs b/e2e-test.mjs
+index 0acbc1e..5ec4b1b 100644
+--- a/e2e-test.mjs
++++ b/e2e-test.mjs
+@@ -373,6 +373,127 @@ if (!csvNav) {
+     : fail('CSV table', `wrappers=${csvInfo.wrappers} tables=${csvInfo.tables} headers=${csvInfo.headers} rows=${csvInfo.rows}`);
+ }
+ 
++// ── 24. Settings panel shows the new options + Reset works ────────────────
++// (ROADMAP v1.1 #8 #9 #10 #11) Open Settings, confirm the new controls
++// exist, set a few prefs to non-default values, click Reset, and verify
++// every `md-reader-*` localStorage key is gone plus the UI is back to
++// defaults.
++await page.evaluate(() => {
++  // The Settings entry in the sidebar is a button whose label text is
++  // "Settings". The icon-only toolbar variant is reserved for collapsed
++  // layouts; here we always have a sidebar, so the text button is
++  // present.
++  const items = [...document.querySelectorAll('.sidebar-nav-item')];
++  const btn = items.find((b) => b.textContent.trim() === 'Settings');
++  if (btn) btn.click();
++});
++await new Promise(r => setTimeout(r, 300));
++const settingsOpen24 = await page.$('.settings-dialog');
++if (!settingsOpen24) {
++  fail('Reset prefs', 'could not open settings dialog');
++} else {
++  const controls = await page.evaluate(() => ({
++    codeTheme: !!document.querySelector('[data-test="code-theme-control"]'),
++    fontFamily: !!document.querySelector('[data-test="font-family-control"]'),
++    reopenLast: !!document.querySelector('[data-test="reopen-last-toggle"]'),
++    resetBtn: !!document.querySelector('[data-test="reset-prefs-btn"]'),
++  }));
++  const allControls = controls.codeTheme && controls.fontFamily && controls.resetBtn;
++  allControls
++    ? pass(`Settings panel shows new options (code theme=${controls.codeTheme}, font family=${controls.fontFamily}, reopen-last=${controls.reopenLast}, reset=${controls.resetBtn})`)
++    : fail('Settings options', JSON.stringify(controls));
++
++  // Set a few prefs to non-default values, then reset.
++  await page.evaluate(() => {
++    localStorage.setItem('md-reader-font-family', 'mono');
++    localStorage.setItem('md-reader-code-theme', 'nord');
++    localStorage.setItem('md-reader-reopen-last', '0');
++  });
++  await page.click('[data-test="reset-prefs-btn"]');
++  await new Promise(r => setTimeout(r, 250));
++  const afterReset = await page.evaluate(() => {
++    const keys = [];
++    for (let i = 0; i < localStorage.length; i++) {
++      const k = localStorage.key(i);
++      if (k && k.startsWith('md-reader-')) keys.push(k);
++    }
++    return {
++      keys,
++      codeTheme: document.documentElement.getAttribute('data-code-theme'),
++      fontFamily: document.documentElement.getAttribute('data-font-family'),
++      reopenLast: localStorage.getItem('md-reader-reopen-last'),
++    };
++  });
++  const resetOk = !afterReset.keys.includes('md-reader-font-family')
++    && !afterReset.keys.includes('md-reader-code-theme')
++    && afterReset.codeTheme === 'github'
++    && afterReset.fontFamily === 'serif'
++    && afterReset.reopenLast === '1';
++  resetOk
++    ? pass(`Reset clears prefs and restores defaults (keys after: ${afterReset.keys.join(',') || '(none)'}; code=${afterReset.codeTheme}, font=${afterReset.fontFamily}, reopen=${afterReset.reopenLast})`)
++    : fail('Reset prefs', JSON.stringify(afterReset));
++  await page.click('.settings-close');
++  await new Promise(r => setTimeout(r, 250));
++}
++
++// ── 25. Reopen-last toggle persists across reload ──────────────────────────
++// (ROADMAP v1.1 #10) Toggle off, reload the page, confirm the pref
++// came back as off — i.e. the localStorage write is what survives
++// reload, not just the in-memory store.
++await page.evaluate(() => {
++  const items = [...document.querySelectorAll('.sidebar-nav-item')];
++  const btn = items.find((b) => b.textContent.trim() === 'Settings');
++  if (btn) btn.click();
++});
++await new Promise(r => setTimeout(r, 250));
++const toggleBefore = await page.evaluate(() => {
++  const t = document.querySelector('[data-test="reopen-last-toggle"]');
++  return {
++    on: t?.classList.contains('on') ?? null,
++    aria: t?.getAttribute('aria-checked') ?? null,
++    stored: localStorage.getItem('md-reader-reopen-last'),
++  };
++});
++await page.click('[data-test="reopen-last-toggle"]');
++await new Promise(r => setTimeout(r, 200));
++const toggleAfterClick = await page.evaluate(() => {
++  const t = document.querySelector('[data-test="reopen-last-toggle"]');
++  return {
++    on: t?.classList.contains('on') ?? null,
++    aria: t?.getAttribute('aria-checked') ?? null,
++    stored: localStorage.getItem('md-reader-reopen-last'),
++  };
++});
++const toggled = toggleBefore.on !== toggleAfterClick.on
++  && toggleAfterClick.stored !== toggleBefore.stored;
++toggled
++  ? pass(`Reopen-last toggle changes (${toggleBefore.stored} → ${toggleAfterClick.stored}, on=${toggleAfterClick.on})`)
++  : fail('Reopen-last toggle', `before=${JSON.stringify(toggleBefore)} after=${JSON.stringify(toggleAfterClick)}`);
++
++await page.click('.settings-close');
++await new Promise(r => setTimeout(r, 200));
++await page.reload({ waitUntil: 'networkidle0' });
++await new Promise(r => setTimeout(r, 600));
++await page.evaluate(() => {
++  const items = [...document.querySelectorAll('.sidebar-nav-item')];
++  const btn = items.find((b) => b.textContent.trim() === 'Settings');
++  if (btn) btn.click();
++});
++await new Promise(r => setTimeout(r, 250));
++const toggleAfterReload = await page.evaluate(() => {
++  const t = document.querySelector('[data-test="reopen-last-toggle"]');
++  return {
++    on: t?.classList.contains('on') ?? null,
++    aria: t?.getAttribute('aria-checked') ?? null,
++    stored: localStorage.getItem('md-reader-reopen-last'),
++  };
++});
++const persisted = toggleAfterReload.on === (toggleAfterClick.stored === '1')
++  && toggleAfterReload.stored === toggleAfterClick.stored;
++persisted
++  ? pass(`Reopen-last persists across reload (stored=${toggleAfterReload.stored}, on=${toggleAfterReload.on})`)
++  : fail('Reopen-last persistence', `after reload=${JSON.stringify(toggleAfterReload)}, expected to match ${toggleAfterClick.stored}`);
++
+ await browser.close();
+ 
+ const failed = results.filter(r => r[0] === 'FAIL');
+
+================================================================================
+
+diff --git a/src-tauri/src/main.rs b/src-tauri/src/main.rs
+index 57b1d71..e361e76 100644
+--- a/src-tauri/src/main.rs
++++ b/src-tauri/src/main.rs
+@@ -427,6 +427,97 @@ fn copy_image(bytes: Vec<u8>) -> Result<(), String> {
+     cb.set_image(data).map_err(|e| e.to_string())
+ }
+ 
++/// Save a pasted clipboard image as `<folder>/<rel_path>` and return the
++/// absolute path actually written. `rel_path` is relative to `folder` and is
++/// canonicalize-checked against the chosen folder — same traversal defense
++/// as `write_file`. The directory containing the file is created if it
++/// doesn't already exist (so pasting into a chapter's `images/` subdir
++/// works on the first paste). Used by the editor's ⌘V handler.
++#[tauri::command]
++fn save_clipboard_image(folder: String, rel_path: String, bytes: Vec<u8>) -> Result<String, String> {
++    if bytes.is_empty() {
++        return Err("empty image bytes".into());
++    }
++    let root = Path::new(&folder);
++    let target = root.join(&rel_path);
++    // Reject traversal: the canonicalized parent must stay inside the root.
++    // The parent may not exist yet (we create it below), so we walk up
++    // until we find a directory that does and use *its* canonical path
++    // for the bounds check — that way refusing "../escape.png" works
++    // even when no `images/` dir exists yet.
++    let mut probe = target.clone();
++    let ancestor = loop {
++        let parent = match probe.parent() {
++            Some(p) => p,
++            None => return Err("invalid path".into()),
++        };
++        if parent.as_os_str().is_empty() { return Err("invalid path".into()); }
++        if parent.is_dir() { break parent.to_path_buf(); }
++        match parent.file_name() {
++            Some(_) => probe = parent.to_path_buf(),
++            None => return Err("invalid path".into()),
++        }
++    };
++    let root_canon = root.canonicalize().map_err(|e| e.to_string())?;
++    let ancestor_canon = ancestor.canonicalize().map_err(|e| e.to_string())?;
++    if !ancestor_canon.starts_with(&root_canon) {
++        return Err("refusing to write outside the selected folder".into());
++    }
++    if let Some(parent) = target.parent() {
++        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
++    }
++    std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
++    Ok(target.to_string_lossy().to_string())
++}
++
++/// Open `path` in the user's external editor / OS handler. Honors a
++/// per-user override stored on the frontend (the editor command is
++/// passed as `editor_override`; if set we run that, otherwise we fall
++/// back to the OS default). On macOS we use `open -t` so the file opens
++/// in TextEdit (the universal fallback) — `open` without `-t` would
++/// open the user's default app for that extension, which is usually
++/// fine but `-t` is the explicit "give me an editor" affordance.
++#[tauri::command]
++fn open_in_external_editor(path: String, editor_override: Option<String>) -> Result<(), String> {
++    let p = Path::new(&path);
++    if !p.exists() {
++        return Err("file not found".into());
++    }
++    if let Some(editor) = editor_override {
++        let trimmed = editor.trim();
++        if !trimmed.is_empty() {
++            // Treat the override as a shell-like command: split on the
++            // first whitespace and pass the file as the only argument.
++            // We don't do full shell parsing — the user types a binary
++            // path or `code`, `subl`, `mate`, `open -e`, etc.
++            let mut parts = trimmed.split_whitespace();
++            let bin = parts.next().unwrap_or(trimmed);
++            let rest: Vec<&str> = parts.collect();
++            let mut cmd = Command::new(bin);
++            for a in rest { cmd.arg(a); }
++            return cmd.arg(p).spawn().map(|_| ()).map_err(|e| format!("failed to spawn `{trimmed}`: {e}"));
++        }
++    }
++    #[cfg(target_os = "macos")]
++    {
++        Command::new("open").arg("-t").arg(p).spawn()
++            .map(|_| ()).map_err(|e| format!("open -t failed: {e}"))
++    }
++    #[cfg(target_os = "linux")]
++    {
++        Command::new("xdg-open").arg(p).spawn()
++            .map(|_| ()).map_err(|e| format!("xdg-open failed: {e}"))
++    }
++    #[cfg(target_os = "windows")]
++    {
++        // The `start` builtin is a cmd.exe thing — we have to invoke it
++        // through cmd /c. The empty "" after /c is the title argument,
++        // which keeps paths starting with a quote from being misparsed.
++        Command::new("cmd").args(["/c", "start", "", &path]).spawn()
++            .map(|_| ()).map_err(|e| format!("start failed: {e}"))
++    }
++}
++
+ /// Rename a markdown file within the folder. `rel_path` is relative to `folder`;
+ /// `new_name` is just the new file name (extension added if missing). Refuses to
+ /// escape the folder or overwrite an existing file. Returns the new relative path.
+@@ -1277,13 +1370,20 @@ mod tests {
+     fn scans_md_skips_txt_and_hidden() {
+         let base = fixture();
+         let r = scan_folder(&base);
+-        assert_eq!(r.folder_name, "mdreader_test_book");
++        // The fixture is now per-test unique (see fixture() above) so the
++        // folder name embeds the pid + counter — just assert it starts
++        // with the canonical prefix and matches the path's tail.
++        assert!(r.folder_name.starts_with("mdreader_test_book"));
++        assert_eq!(
++            r.folder_name,
++            base.file_name().unwrap().to_string_lossy().to_string()
++        );
+         let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+         assert_eq!(paths, vec!["intro.md", "part-i/ch1.md"]);
+         let ch1 = r.files.iter().find(|f| f.path == "part-i/ch1.md").unwrap();
+         assert_eq!(ch1.content, "# Ch1\nbody");
+         assert_eq!(ch1.name, "ch1.md");
+-        assert!(r.root.ends_with("mdreader_test_book"));
++        assert!(r.root.ends_with(&r.folder_name));
+     }
+ 
+     #[test]
+@@ -1328,7 +1428,10 @@ mod tests {
+             .expect("ipc command should succeed")
+             .deserialize::<serde_json::Value>()
+             .unwrap();
+-        assert_eq!(json["folder_name"], "mdreader_test_book");
++        // Folder name is now per-test unique — just confirm it parses and
++        // matches the temp dir's leaf.
++        let folder_name = json["folder_name"].as_str().unwrap();
++        assert!(folder_name.starts_with("mdreader_test_book"));
+         assert_eq!(json["files"].as_array().unwrap().len(), 2);
+     }
+ 
+@@ -1551,4 +1654,80 @@ A --> B
+         assert!(after2.contains("\"id\":\"newer\""));
+         assert!(!after2.contains("\"id\":\"new\""));
+     }
++
++    /// The editor's ⌘V clipboard-image handler calls `save_clipboard_image`
++    /// with bytes the user just pasted. The command must:
++    ///  1. Write the bytes to `<folder>/<rel_path>`, creating intermediate
++    ///     directories (e.g. `images/`) on demand.
++    ///  2. Reject any `rel_path` that escapes `folder` (same canonicalize
++    ///     check as `write_file`) — even when the parent dir doesn't
++    ///     exist yet, which is the common case for first paste.
++    ///  3. Return the absolute path actually written.
++    #[test]
++    fn save_clipboard_image_writes_and_creates_images_dir() {
++        let dir = std::env::temp_dir().join("mdreader_clip_image_test");
++        let _ = std::fs::remove_dir_all(&dir);
++        std::fs::create_dir_all(&dir).unwrap();
++
++        let folder = dir.to_string_lossy().to_string();
++        let rel = "images/pasted-1.png".to_string();
++        // A minimal valid 1×1 PNG (89 bytes, all zeros body is fine — we
++        // don't decode on the Rust side, just write the bytes through).
++        let bytes: Vec<u8> = vec![
++            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // signature
++            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR length + tag
++            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1×1
++            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA + CRC
++            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, // IDAT
++            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
++            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
++            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, // IEND
++            0x42, 0x60, 0x82,
++        ];
++
++        let saved = save_clipboard_image(folder, rel.clone(), bytes.clone()).unwrap();
++        // Returned path should point at the written file and be inside
++        // our temp folder.
++        let saved_path = std::path::PathBuf::from(&saved);
++        assert!(saved_path.starts_with(&dir));
++        assert!(saved_path.ends_with("images/pasted-1.png"));
++        // The `images/` subdir should have been created on demand.
++        assert!(dir.join("images").is_dir());
++        // Bytes round-trip exactly.
++        let read_back = std::fs::read(&saved_path).unwrap();
++        assert_eq!(read_back, bytes);
++
++        // Empty bytes are rejected (the user pasted something that wasn't
++        // an image — the JS side already filters, but defense in depth).
++        let err = save_clipboard_image(dir.to_string_lossy().to_string(), "empty.png".into(), vec![]);
++        assert!(err.is_err(), "empty bytes should be rejected");
++    }
++
++    #[test]
++    fn save_clipboard_image_rejects_traversal() {
++        let dir = std::env::temp_dir().join("mdreader_clip_image_traversal_test");
++        let _ = std::fs::remove_dir_all(&dir);
++        std::fs::create_dir_all(&dir).unwrap();
++
++        let folder = dir.to_string_lossy().to_string();
++        // Sibling escape — the canonicalize parent must reject.
++        let err = save_clipboard_image(
++            folder.clone(),
++            "../escape.png".into(),
++            vec![0x89, 0x50, 0x4E, 0x47],
++        );
++        assert!(err.is_err(), "traversal should be rejected");
++        assert!(!dir.join("escape.png").exists());
++
++        // Nested traversal — `images/../../escape.png` resolves outside
++        // the folder after canonicalize and must be rejected even though
++        // the `images/` prefix is legitimate. This is the realistic
++        // attack: a maliciously-named file with `..` in the middle.
++        let err = save_clipboard_image(
++            folder,
++            "images/../../escape2.png".into(),
++            vec![0x89, 0x50, 0x4E, 0x47],
++        );
++        assert!(err.is_err(), "nested traversal should be rejected");
++    }
+ }
+
+================================================================================
+
+diff --git a/src/App.svelte b/src/App.svelte
+index d190fe4..e7b1794 100644
+--- a/src/App.svelte
++++ b/src/App.svelte
+@@ -2,14 +2,16 @@
+   import { onMount } from 'svelte';
+   import { TAURI } from './lib/tauri.js';
+   import {
+-    ready, route, navCollapsed, navOpen,
++    ready, route, navCollapsed, navOpen, reopenLast,
+     openLast, openScanResult, setupWatcherListener,
+   } from './lib/stores.js';
++  import { crossSearchOpen, crossSearchQuery, editing } from './lib/stores/state.js';
+   import Picker from './components/Picker.svelte';
+   import Sidebar from './components/Sidebar.svelte';
+   import Library from './components/Library.svelte';
+   import Reader from './components/Reader.svelte';
+   import Settings from './components/Settings.svelte';
++  import CrossSearchPanel from './components/CrossSearchPanel.svelte';
+ 
+   let isMobile = $state(false);
+ 
+@@ -21,27 +23,49 @@
+     }
+   }
+ 
++  // ⌘⇧F (macOS) / Ctrl+Shift+F (Win/Linux) opens the cross-chapter search
++  // panel. The panel re-closes on the same shortcut so a second press
++  // dismisses it without losing focus context. We skip the shortcut while
++  // the Tiptap editor is open — Tiptap owns the keyboard there.
++  function onGlobalKey(e) {
++    if ($editing) return;
++    const isMod = e.metaKey || e.ctrlKey;
++    if (isMod && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
++      e.preventDefault();
++      if ($crossSearchOpen) {
++        crossSearchOpen.set(false);
++        crossSearchQuery.set('');
++      } else {
++        crossSearchOpen.set(true);
++      }
++    }
++  }
++
+   onMount(async () => {
+     syncMobile();
+     // Use both matchMedia and resize so it works across browsers + emulation.
+     const mq = window.matchMedia('(max-width: 768px)');
+     mq.addEventListener('change', syncMobile);
+     window.addEventListener('resize', syncMobile);
++    window.addEventListener('keydown', onGlobalKey);
+ 
+     await setupWatcherListener();
+ 
+     const params = new URLSearchParams(location.search);
+     if (params.get('test') === '1') {
+       await loadTestData();
+-    } else if (TAURI) {
+-      // Continue where you left off; first launch (nothing remembered) falls
+-      // through to the Home screen. The sidebar Home button returns here.
++    } else if (TAURI && $reopenLast) {
++      // ROADMAP v1.1 #10 — gated on the "Reopen last folder on launch"
++      // preference (default: on). First launch (nothing remembered) still
++      // falls through to the Home screen. The sidebar Home button
++      // returns here.
+       await openLast();
+     }
+ 
+     return () => {
+       mq.removeEventListener('change', syncMobile);
+       window.removeEventListener('resize', syncMobile);
++      window.removeEventListener('keydown', onGlobalKey);
+     };
+   });
+ 
+
+================================================================================
+
+diff --git a/src/app.css b/src/app.css
+index c507f11..0300d31 100644
+--- a/src/app.css
++++ b/src/app.css
+@@ -683,6 +683,16 @@
+     .sidebar-chapter-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+     .sidebar-chapter .done { color: var(--ink-muted); font-size: 11px; flex-shrink: 0; }
+     .sidebar-chapter .bm { color: var(--tertiary); font-size: 11px; flex-shrink: 0; }
++    /* ROADMAP v1.1 #13 — chapter progress ring. Two concentric
++       circles: a faint track + a foreground arc whose stroke-dasharray
++       is bound to the scroll fraction. Updates in real time on the
++       currently open chapter; falls back to the persisted scroll for
++       every other chapter so re-opening the book feels continuous. */
++    .sidebar-progress { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
++    .sidebar-progress svg { display: block; transform: rotate(-90deg); }
++    .sidebar-progress-track { fill: none; stroke: var(--surface-variant); stroke-width: 2; }
++    .sidebar-progress-bar { fill: none; stroke: var(--tertiary); stroke-width: 2; stroke-linecap: round; transition: stroke-dasharray 0.12s linear; }
++    .sidebar-chapter:not(.active) .sidebar-progress-bar { opacity: 0.55; }
+     .sidebar-section-label {
+       font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+       letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-muted);
+@@ -1408,6 +1418,115 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
+ .reader2-fab:active { transform: scale(0.95); }
+ .reader2-fab svg { width: 20px; height: 20px; }
+ 
++/* ── Auto-TOC outline pane (ROADMAP v1.1 #3) ─────────────────────────── */
++/* Slide-in overlay anchored to the right edge of the viewport. The
++   article column never reflows when the pane opens — the pane is a
++   true overlay, not a flex sibling. On mobile it becomes a full-width
++   drawer. The `reader2.outline-on` class on the parent shifts the
++   topbar's right padding so the toolbar doesn't slip behind the pane. */
++.outline-pane {
++  position: fixed;
++  top: 64px;                   /* clear the sticky toolbar */
++  right: 0;
++  bottom: 0;
++  width: 280px;
++  max-width: 80vw;
++  z-index: 45;                 /* under the toolbar (50) + FAB (60) */
++  background: color-mix(in srgb, var(--surface) 96%, transparent);
++  backdrop-filter: blur(12px);
++  border-left: 1px solid var(--surface-variant);
++  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.06);
++  display: flex;
++  flex-direction: column;
++  transform: translateX(100%);
++  transition: transform 0.22s ease;
++  overflow: hidden;
++  font-family: var(--font-sans);
++}
++.outline-pane.visible { transform: translateX(0); }
++
++.outline-pane-header {
++  display: flex; align-items: center; justify-content: space-between;
++  padding: var(--space-3) var(--space-4);
++  border-bottom: 1px solid var(--surface-variant);
++  flex-shrink: 0;
++}
++.outline-pane-title {
++  font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
++  text-transform: uppercase; color: var(--ink-muted);
++}
++.outline-pane-close {
++  display: inline-flex; align-items: center; justify-content: center;
++  width: 28px; height: 28px; padding: 0;
++  background: none; border: none; cursor: pointer;
++  color: var(--ink-secondary); border-radius: var(--radius-sm);
++  transition: background 0.15s, color 0.15s;
++}
++.outline-pane-close:hover { background: var(--surface-variant); color: var(--ink); }
++.outline-pane-close svg { width: 14px; height: 14px; }
++
++.outline-pane-empty {
++  padding: var(--space-6) var(--space-4);
++  font-size: 13px; color: var(--ink-muted);
++  text-align: center;
++}
++
++.outline-pane-list {
++  list-style: none; margin: 0; padding: var(--space-2) 0;
++  overflow-y: auto; flex: 1; min-height: 0;
++}
++.outline-pane-item { display: block; }
++.outline-pane-item a {
++  display: block;
++  padding: 6px var(--space-4);
++  font-size: 13px; line-height: 1.35;
++  color: var(--ink-secondary);
++  text-decoration: none;
++  border-left: 2px solid transparent;
++  transition: background 0.12s, color 0.12s, border-color 0.12s;
++  /* Long titles get ellipsized — the full text is on `title` for hover. */
++  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
++}
++.outline-pane-item a:hover {
++  background: var(--surface-variant);
++  color: var(--ink);
++}
++.outline-pane-item.level-1 > a { font-weight: 600; color: var(--ink); }
++.outline-pane-item.level-2 > a { padding-left: calc(var(--space-4) + var(--space-3)); font-size: 12.5px; }
++.outline-pane-item.level-3 > a { padding-left: calc(var(--space-4) + var(--space-6)); font-size: 12px; color: var(--ink-muted); }
++.outline-pane-item.active > a {
++  color: var(--tertiary);
++  border-left-color: var(--tertiary);
++  background: var(--tertiary-dim);
++}
++
++/* Subtle scrollbar styling — outline lists can be long, and the
++   default scrollbar is visually heavy in a slim drawer. */
++.outline-pane-list::-webkit-scrollbar { width: 6px; }
++.outline-pane-list::-webkit-scrollbar-thumb { background: var(--surface-variant); border-radius: 999px; }
++.outline-pane-list::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
++
++/* When the pane is open, the toolbar's right padding grows so the
++   tool buttons don't slide under the pane. We only do this on desktop
++   where the pane is narrow (280px) — on mobile the pane is full-width
++   and the user is expected to interact with the pane, not the toolbar. */
++@media (min-width: 769px) {
++  .reader2.outline-on .reader2-toolbar { padding-right: 280px; }
++  .reader2.outline-on .reader2-toolbar-inner { max-width: none; }
++}
++/* On mobile the pane becomes a true full-width overlay that sits over
++   the toolbar. The toolbar's own toggle still works (z-index), so we
++   leave the toolbar padding alone there. */
++@media (max-width: 768px) {
++  .outline-pane { width: 100%; max-width: 100%; }
++}
++
++/* Hide the outline button in print / PDF output, same as the rest of
++   the chrome. */
++@media print {
++  .outline-pane, .reader2-toolbar button[aria-label="Toggle outline"] { display: none !important; }
++}
++
+ /* ── Sidebar (editorial) ────────────────────────────────────────────── */
+ .sidebar-brand { padding: var(--space-5) var(--space-4) var(--space-3); }
+ .sidebar-brand-row { display: flex; align-items: center; justify-content: space-between; }
+@@ -1634,6 +1753,32 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
+ }
+ .settings-build { font-family: var(--font-sans); font-size: 11px; color: var(--ink-muted); }
+ 
++/* Toggle (used by reopen-last) — same visual language as the sidebar
++   dark-mode toggle so the app's chrome stays consistent. */
++.settings-toggle {
++  width: 34px; height: 18px; border-radius: 999px;
++  background: var(--surface-variant); position: relative;
++  transition: background 0.2s; flex-shrink: 0;
++  border: none; cursor: pointer; padding: 0;
++}
++.settings-toggle.on { background: var(--tertiary); }
++.settings-toggle-knob {
++  position: absolute; top: 2px; left: 2px;
++  width: 14px; height: 14px; border-radius: 999px;
++  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.2);
++  transition: transform 0.2s;
++}
++.settings-toggle.on .settings-toggle-knob { transform: translateX(16px); }
++
++/* Hint text under a settings row name (e.g. describing what Reset does). */
++.settings-row-name {
++  display: flex; flex-direction: column; gap: 2px;
++}
++.settings-row-hint {
++  font-family: var(--font-sans); font-size: 11px; font-weight: 400;
++  color: var(--ink-muted); line-height: 1.4;
++}
++
+ /* ── Rename modal ───────────────────────────────────────────────────── */
+ .rename-overlay {
+   position: fixed; inset: 0; z-index: 90;
+@@ -1666,6 +1811,131 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
+ .rename-error { font-family: var(--font-sans); font-size: 12px; color: var(--tertiary); margin-top: var(--space-2); }
+ .rename-actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-6); }
+ 
++/* ── ROADMAP v1.1 #16 — first-launch onboarding hint ─────────────── */
++/* A small pill anchored to the top-left of the reader, with a
++   chevron that points at the sidebar. The user dismisses it once
++   and it never comes back. */
++.onboard-hint {
++  position: fixed;
++  top: 72px;
++  left: 296px; /* sidebar width (264) + 12 margin + 20 breathing room */
++  z-index: 70;
++  max-width: 320px;
++  background: var(--surface);
++  border: 1px solid var(--surface-variant);
++  border-radius: var(--radius-md);
++  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
++  padding: var(--space-3) var(--space-4);
++  display: flex;
++  align-items: center;
++  gap: var(--space-3);
++  font-family: var(--font-sans);
++  font-size: 12.5px;
++  color: var(--ink-secondary);
++  line-height: 1.45;
++  animation: onboard-fade-in 0.3s ease;
++}
++.onboard-hint-arrow {
++  position: absolute;
++  left: -7px;
++  top: 50%;
++  transform: translateY(-50%) rotate(45deg);
++  width: 12px; height: 12px;
++  background: var(--surface);
++  border-left: 1px solid var(--surface-variant);
++  border-bottom: 1px solid var(--surface-variant);
++}
++.onboard-hint-body { display: flex; flex-direction: column; gap: var(--space-2); }
++.onboard-hint-text { color: var(--ink); }
++.onboard-hint-dismiss {
++  align-self: flex-start;
++  background: var(--tertiary);
++  color: #fff;
++  border: none;
++  border-radius: var(--radius-md);
++  padding: 4px 10px;
++  font-family: var(--font-sans);
++  font-size: 11px;
++  font-weight: 600;
++  cursor: pointer;
++  transition: opacity 0.15s;
++}
++.onboard-hint-dismiss:hover { opacity: 0.85; }
++@keyframes onboard-fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
++/* When the sidebar is collapsed, the hint should slide further left
++   so the chevron still points at the (collapsed) sidebar's last edge. */
++.app-shell.nav-collapsed .onboard-hint { left: 48px; }
++/* On mobile, the sidebar is a drawer — drop the chevron and let the
++   hint span more width. */
++@media (max-width: 768px) {
++  .onboard-hint { left: 16px; right: 16px; max-width: none; }
++  .onboard-hint-arrow { display: none; }
++}
++
++/* ── ROADMAP v1.1 #17 — keyboard cheatsheet modal ──────────────── */
++/* Centred card on a soft backdrop. NOT a focus trap (per spec):
++   Esc/click-outside both close. */
++.cheatsheet-backdrop {
++  position: fixed; inset: 0; z-index: 90;
++  background: rgba(0, 0, 0, 0.35);
++  display: flex; align-items: center; justify-content: center;
++  animation: onboard-fade-in 0.15s ease;
++}
++.cheatsheet {
++  width: min(440px, calc(100vw - 32px));
++  max-height: 80vh;
++  overflow-y: auto;
++  background: var(--surface);
++  border: 1px solid var(--surface-variant);
++  border-radius: var(--radius-lg);
++  box-shadow: 0 12px 36px rgba(0,0,0,0.18);
++  padding: var(--space-5) var(--space-6) var(--space-6);
++}
++.cheatsheet-head {
++  display: flex; align-items: center; justify-content: space-between;
++  margin-bottom: var(--space-4);
++}
++.cheatsheet-title {
++  font-family: var(--font-serif);
++  font-size: 1.1rem;
++  font-weight: 600;
++  color: var(--ink);
++}
++.cheatsheet-close {
++  border: none; background: none; cursor: pointer;
++  font-size: 22px; line-height: 1; color: var(--ink-muted);
++  padding: 0 var(--space-1); border-radius: var(--radius-sm);
++  transition: color 0.15s, background 0.15s;
++}
++.cheatsheet-close:hover { color: var(--tertiary); background: var(--surface-variant); }
++.cheatsheet-list { display: flex; flex-direction: column; gap: var(--space-2); }
++.cheatsheet-row {
++  display: flex; align-items: center; justify-content: space-between;
++  gap: var(--space-3);
++  padding: 6px 0;
++  font-family: var(--font-sans);
++  font-size: 12.5px;
++  color: var(--ink-secondary);
++  border-bottom: 1px solid var(--surface-variant);
++}
++.cheatsheet-row:last-child { border-bottom: none; }
++.cheatsheet-keys { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
++.cheatsheet-keys kbd {
++  display: inline-block;
++  min-width: 22px; height: 22px;
++  padding: 0 6px;
++  font-family: var(--font-mono, monospace);
++  font-size: 11px;
++  font-weight: 600;
++  color: var(--ink);
++  background: var(--surface-container-low);
++  border: 1px solid var(--surface-variant);
++  border-bottom-width: 2px;
++  border-radius: var(--radius-sm);
++  text-align: center;
++  line-height: 20px;
++}
++
+ /* ── Slide deck view ─────────────────────────────────────────────── */
+ .reader2-slides {
+   position: relative;
+@@ -1828,3 +2098,60 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
+   padding: var(--space-6);
+   margin-bottom: var(--space-6);
+ }
++
++/* ── Nord code theme (ROADMAP v1.1 #8) ───────────────────────────────
++   Nord is a single dark theme — picking it forces the polar-night
++   background regardless of the app's light/dark mode. The per-token
++   inline colors (which shiki emits with `style="color:#nordToken"`)
++   are not overridden so the frost/aurora syntax hues stay legible. */
++[data-code-theme="nord"] .shiki,
++[data-code-theme="nord"] .shiki-block {
++  background: #2E3440 !important;
++  color: #D8DEE9 !important;
++}
++[data-code-theme="nord"] .chapter-markdown .shiki-block { border-color: #4C566A; }
++
++/* ═══════════════════════════════════════════════════════════════════════
++   FONT FAMILY (ROADMAP v1.1 #9) — three presets selected from Settings.
++   The `data-font-family` attribute on <html> drives which stack is used
++   for body text + chapter content. Sans keeps the chrome (sidebar,
++   toolbars, headers) in Inter; only the chapter body re-binds. Mono
++   switches everything that takes prose text to a monospace stack so
++   the user can see exactly what their code-shaped text would look like.
++   ═══════════════════════════════════════════════════════════════════════ */
++
++[data-font-family="sans"] body,
++[data-font-family="sans"] .chapter-markdown,
++[data-font-family="sans"] .chapter-markdown p,
++[data-font-family="sans"] .chapter-markdown li,
++[data-font-family="sans"] .chapter-markdown blockquote p,
++[data-font-family="sans"] .lib-display-title,
++[data-font-family="sans"] .lib-sub,
++[data-font-family="sans"] .lib-card-title,
++[data-font-family="sans"] .reader2-title,
++[data-font-family="sans"] .reader2-sib-text,
++[data-font-family="sans"] .notion-prose,
++[data-font-family="sans"] .notion-prose h1,
++[data-font-family="sans"] .notion-prose h2,
++[data-font-family="sans"] .notion-prose h3,
++[data-font-family="sans"] .notion-prose h4 {
++  font-family: var(--font-sans);
++}
++
++[data-font-family="mono"] body,
++[data-font-family="mono"] .chapter-markdown,
++[data-font-family="mono"] .chapter-markdown p,
++[data-font-family="mono"] .chapter-markdown li,
++[data-font-family="mono"] .chapter-markdown blockquote p,
++[data-font-family="mono"] .lib-display-title,
++[data-font-family="mono"] .lib-sub,
++[data-font-family="mono"] .lib-card-title,
++[data-font-family="mono"] .reader2-title,
++[data-font-family="mono"] .reader2-sib-text,
++[data-font-family="mono"] .notion-prose,
++[data-font-family="mono"] .notion-prose h1,
++[data-font-family="mono"] .notion-prose h2,
++[data-font-family="mono"] .notion-prose h3,
++[data-font-family="mono"] .notion-prose h4 {
++  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
++}
+
+================================================================================
+
+diff --git a/src/components/Editor.svelte b/src/components/Editor.svelte
+index 0f420d7..2c9c1b2 100644
+--- a/src/components/Editor.svelte
++++ b/src/components/Editor.svelte
+@@ -5,7 +5,8 @@
+   import StarterKit from '@tiptap/starter-kit';
+   import Placeholder from '@tiptap/extension-placeholder';
+   import { Markdown } from 'tiptap-markdown';
+-  import { saveFile } from '../lib/stores.js';
++  import { saveFile, folderRoot } from '../lib/stores.js';
++  import { saveClipboardImage } from '../lib/tauri.js';
+   import { renderMarkdown, enhance } from '../lib/markdown.js';
+ 
+   let { item, oncancel, onsaved } = $props();
+@@ -22,7 +23,186 @@
+     code: false, bullet: false, ordered: false, quote: false,
+   });
+ 
+-  let editor;
++  // ── Find / replace (#15) ──
++  // Tiptap has built-in text search via setTextSelection + commands. We
++  // present a minimal Find/Replace panel (⌘H opens it; the user can also
++  // toggle via toolbar buttons). The "Find" button jumps to the first
++  // match. "Replace" substitutes the current match; "Replace all" walks
++  // the whole document.
++  let showFindReplace = $state(false);
++  let findQuery  = $state('');
++  let replaceVal = $state('');
++  let findStatus = $state(''); // '' | 'no-match' | 'N matches'
++  let findReplacePanelEl = $state(null);
++
++  function openFindReplace() { showFindReplace = true; }
++  function closeFindReplace() {
++    showFindReplace = false;
++    findQuery = '';
++    replaceVal = '';
++    findStatus = '';
++    editor?.commands.focus();
++  }
++
++  // Build a case-insensitive plain-text regex from the query, escaping
++  // user input so .+ etc. don't surprise us. Empty query → 0 matches.
++  function makeFindRegex(q) {
++    if (!q) return null;
++    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    return new RegExp(escaped, 'gi');
++  }
++
++  function findInDoc() {
++    if (!editor) return null;
++    const re = makeFindRegex(findQuery);
++    if (!re) { findStatus = ''; return null; }
++    const md = editor.storage.markdown.getMarkdown();
++    const matches = [...md.matchAll(re)];
++    findStatus = matches.length === 0 ? 'no-match' : `${matches.length} match${matches.length === 1 ? '' : 'es'}`;
++    return { re, matches, md };
++  }
++
++  // Highlight the first match by selecting it inside the editor. We use
++  // ProseMirror's `setTextSelection` on a resolved doc position. The
++  // simplest approach: walk the doc's text nodes, find the first match
++  // in linear order, then compute the absolute doc position.
++  function findFirst() {
++    if (!editor || !findQuery) return;
++    const { state } = editor;
++    const { doc } = state;
++    const re = makeFindRegex(findQuery);
++    if (!re) return;
++    // Build a flat list of {from, to, text} for each text node, then
++    // walk it in order looking for the first match.
++    let absPos = null;
++    doc.descendants((node, pos) => {
++      if (absPos != null) return false; // already found
++      if (!node.isText) return true;
++      const text = node.text || '';
++      re.lastIndex = 0;
++      const m = re.exec(text);
++      if (m) {
++        absPos = pos + m.index;
++        return false;
++      }
++      return true;
++    });
++    if (absPos == null) {
++      findStatus = 'no-match';
++      return;
++    }
++    // Select the match by computing its end position. We need the
++    // matched substring's length in code units (we already have it in m).
++    const matchLen = (() => {
++      let pos = 0, len = 0, found = false;
++      doc.descendants((node, p) => {
++        if (found) return false;
++        if (!node.isText) return true;
++        const text = node.text || '';
++        re.lastIndex = 0;
++        const m = re.exec(text);
++        if (m) {
++          len = m[0].length;
++          pos = p + m.index;
++          found = true;
++          return false;
++        }
++        return true;
++      });
++      return { pos, len };
++    })();
++    editor.commands.setTextSelection({ from: matchLen.pos, to: matchLen.pos + matchLen.len });
++    findInDoc();
++  }
++
++  function replaceOne() {
++    if (!editor || !findQuery) return;
++    const { state } = editor;
++    const { from, to, empty } = state.selection;
++    if (empty) { findFirst(); return; }
++    // If the current selection's text matches the query, replace it;
++    // otherwise just jump to the first match.
++    const selText = state.doc.textBetween(from, to, '\n', '\n');
++    if (selText.toLowerCase() === findQuery.toLowerCase()) {
++      editor.chain().focus().insertContentAt({ from, to }, replaceVal).run();
++      findInDoc();
++    } else {
++      findFirst();
++    }
++  }
++
++  function replaceAll() {
++    if (!editor || !findQuery) return;
++    const re = makeFindRegex(findQuery);
++    if (!re) return;
++    const md = editor.storage.markdown.getMarkdown();
++    const escaped = findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    const replacement = replaceVal.replace(/\$/g, '$$$$');
++    const out = md.replace(re, replacement);
++    // Apply via a single content replacement so the doc is replaced
++    // atomically (no cursor jumps mid-replace).
++    editor.commands.setContent(out, { emitUpdate: true });
++    findInDoc();
++  }
++
++  // ── Clipboard image paste (#4) ──
++  // Intercept ⌘V when the clipboard has a PNG. We can't rely on
++  // ProseMirror's `handlePaste` for image files because Tiptap's image
++  // extension isn't installed (we render markdown-as-text). Instead we
++  // listen on the editor's DOM element and grab the clipboardData
++  // before ProseMirror does anything with it.
++  async function handlePaste(e) {
++    if (!e.clipboardData) return;
++    const items = [...e.clipboardData.items];
++    const imgItem = items.find((it) => it.kind === 'file' && it.type === 'image/png');
++    if (!imgItem) return;
++    e.preventDefault();
++    e.stopPropagation();
++    const file = imgItem.getAsFile();
++    if (!file) return;
++    await pastePng(file);
++  }
++
++  async function pastePng(file) {
++    try {
++      const buf = await file.arrayBuffer();
++      const bytes = new Uint8Array(buf);
++      // Find the chapter's parent directory (the chapter's diskPath is
++      // `<rel-from-folder>/<file>.md`; the images live in `<chapter-dir>/images/`).
++      const diskPath = item?.diskPath || item?.path || '';
++      const chapterDir = diskPath.includes('/') ? diskPath.slice(0, diskPath.lastIndexOf('/')) : '';
++      const base = chapterDir ? `${chapterDir}/images` : 'images';
++      // Suggest a unique filename: pasted-YYYYMMDD-HHMMSS.png. We don't
++      // try to de-dup against existing files — the FS will overwrite
++      // and the user can rename. Stamping by time means a second paste
++      // a minute later is unlikely to collide.
++      const now = new Date();
++      const pad = (n) => String(n).padStart(2, '0');
++      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
++      const filename = `pasted-${stamp}.png`;
++      const relPath = `${base}/${filename}`;
++
++      // Get the Tauri folder root (where the chapter lives). Outside
++      // Tauri (?test=1 browser mode) we can't actually write to disk,
++      // so we just insert the markdown link — the user will see the
++      // link but the file won't exist on disk.
++      let folder = '';
++      try { folder = $folderRoot; } catch {}
++      if (folder) {
++        await saveClipboardImage(folder, relPath, bytes);
++      }
++      // Insert the markdown image link at the cursor. We use the
++      // markdown storage-aware form: insertContent with a markdown
++      // string would be ideal, but Tiptap wraps that in a paragraph.
++      // For a simple "image on its own line" the trick is to insert
++      // the literal text — the markdown storage reads it back as an
++      // image when the doc is serialized.
++      const md = `![pasted](./images/${filename})`;
++      editor?.chain().focus().insertContent(md).run();
++    } catch (e) {
++      error = 'Image paste failed: ' + String(e);
++    }
++  }
+ 
+   function updatePreview() {
+     if (!editor) return;
+@@ -67,7 +247,17 @@
+           Markdown.configure({ html: false, tightLists: true }),
+         ],
+         content: item?.content ?? '',
+-        editorProps: { attributes: { class: 'notion-prose' } },
++        editorProps: {
++          attributes: { class: 'notion-prose' },
++          // #4: intercept paste on the editor DOM. The Tiptap StarterKit
++          // would just insert the image bytes into a paragraph; we
++          // route them to the Rust clipboard-image save path instead.
++          handlePaste: (view, event) => {
++            // Let Tiptap's own paste handlers run unless we caught a
++            // PNG. handlePaste must return true to swallow the event.
++            return handlePaste(event);
++          },
++        },
+         onUpdate:          syncActive,
+         onSelectionUpdate: syncActive,
+         // transaction also fires on stored-mark changes (e.g. toggling bold with a
+@@ -102,6 +292,8 @@
+ <svelte:window onkeydown={(e) => {
+   if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); }
+   if ((e.metaKey || e.ctrlKey) && e.key === 'p') { e.preventDefault(); showPreview = !showPreview; }
++  if ((e.metaKey || e.ctrlKey) && e.key === 'h') { e.preventDefault(); showFindReplace = !showFindReplace; if (showFindReplace) tick().then(() => findReplacePanelEl?.querySelector('input')?.focus()); }
++  if (e.key === 'Escape' && showFindReplace) { e.preventDefault(); closeFindReplace(); }
+ }} />
+ 
+ <div class="editor-backdrop" aria-hidden="true"></div>
+@@ -124,6 +316,10 @@
+       <div class="editor-tool-sep"></div>
+       <button class="editor-tool editor-tool-sm" onclick={() => c()?.undo().run()} title="Undo (⌘Z)">↩</button>
+       <button class="editor-tool editor-tool-sm" onclick={() => c()?.redo().run()} title="Redo (⌘⇧Z)">↪</button>
++      <div class="editor-tool-sep"></div>
++      <button class="editor-tool editor-tool-sm" onclick={openFindReplace} title="Find / Replace (⌘H)" aria-label="Find and replace">
++        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
++      </button>
+     </div>
+     <div class="editor-tool-sep"></div>
+     <button class="editor-tool editor-tool-preview {showPreview ? 'is-active':''}"
+@@ -138,6 +334,41 @@
+     <button class="btn-primary" onclick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+   </div>
+ 
++  <!-- Find/Replace panel (#15) -->
++  {#if showFindReplace}
++    <div class="editor-find-replace" bind:this={findReplacePanelEl} role="search" aria-label="Find and replace in editor">
++      <div class="editor-find-row">
++        <label class="editor-find-label">
++          Find
++          <input
++            type="text"
++            class="editor-find-input"
++            placeholder="Search in chapter…"
++            bind:value={findQuery}
++            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findFirst(); } }}
++          />
++        </label>
++        <button class="editor-tool editor-tool-sm" onclick={findFirst} title="Find first match">Find</button>
++        <span class="editor-find-status" aria-live="polite">{findStatus}</span>
++        <button class="editor-tool editor-tool-sm" onclick={closeFindReplace} title="Close (Esc)" aria-label="Close find panel">×</button>
++      </div>
++      <div class="editor-find-row">
++        <label class="editor-find-label">
++          Replace
++          <input
++            type="text"
++            class="editor-find-input"
++            placeholder="Replacement text…"
++            bind:value={replaceVal}
++            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); replaceOne(); } }}
++          />
++        </label>
++        <button class="editor-tool editor-tool-sm" onclick={replaceOne}  title="Replace current match">Replace</button>
++        <button class="editor-tool editor-tool-sm" onclick={replaceAll}  title="Replace all matches">All</button>
++      </div>
++    </div>
++  {/if}
++
+   <!-- Body: edit pane (+ optional preview pane) -->
+   <div class="notion-split {showPreview ? 'has-preview' : ''}">
+     <div class="notion-edit-side">
+
+================================================================================
+
+diff --git a/src/components/Reader.svelte b/src/components/Reader.svelte
+index 1790f56..25e72e7 100644
+--- a/src/components/Reader.svelte
++++ b/src/components/Reader.svelte
+@@ -12,6 +12,8 @@
+   import { hasMultipleSlides } from '../lib/slides.js';
+   import Editor from './Editor.svelte';
+   import SlideViewer from './SlideViewer.svelte';
++  import OutlinePane from './OutlinePane.svelte';
++  import { outlineVisible, isOutlineVisible, toggleOutline } from '../lib/stores/prefs.js';
+ 
+   let { path, isMobile = false } = $props();
+ 
+@@ -79,6 +81,26 @@
+ 
+   let progressBar = $state(0);
+ 
++  // ROADMAP v1.1 #3 — auto-TOC outline pane visibility.
++  // The store keeps a tri-state ('1' / '0' / 'auto'); we resolve 'auto'
++  // against the current viewport on every read. On viewport changes
++  // (resize, mobile <-> desktop) we re-resolve, so a chapter on a
++  // desktop stays expanded, then auto-collapses if the window is
++  // narrowed. The first explicit user toggle pins the value to '1'
++  // or '0' so we stop auto-resolving.
++  let viewportW = $state(typeof window !== 'undefined' ? window.innerWidth : 1200);
++  $effect(() => {
++    if (typeof window === 'undefined') return;
++    const onResize = () => { viewportW = window.innerWidth; };
++    window.addEventListener('resize', onResize);
++    return () => window.removeEventListener('resize', onResize);
++  });
++  const outlineOpen = $derived(isOutlineVisible($outlineVisible, viewportW));
++  // Wrapper class for the reader — adds an `outline-on` hook so CSS can
++  // shift toolbar right-margin / page padding when the pane is showing,
++  // keeping the article centred in the remaining space.
++  const readerCls = $derived('reader2' + (outlineOpen ? ' outline-on' : ''));
++
+   // Re-enhance + restore scroll whenever the chapter (or its html) changes.
+   // Close the editor whenever the chapter's rendered HTML changes (external update or save).
+   // IMPORTANT: must NOT read `editing` here — that would make Svelte track it, causing
+@@ -278,12 +300,19 @@
+   }
+ 
+   // Keyboard: ← / → move between chapters when not typing.
++  // ROADMAP v1.1 #3 — ⌘\ (Cmd/Ctrl + backslash) toggles the outline pane.
+   function onKey(e) {
+     const t = e.target;
+     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+     if (editing) return;
+     if (e.key === 'ArrowLeft' && sib.prev) goChapter(sib.prev.path);
+     else if (e.key === 'ArrowRight' && sib.next) goChapter(sib.next.path);
++    else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
++      // ⌘\ — toggle the auto-TOC outline pane. We preventDefault so the
++      // browser doesn't steal the keystroke (e.g. Chrome's devtools hint).
++      e.preventDefault();
++      toggleOutline();
++    }
+   }
+ </script>
+ 
+@@ -292,7 +321,7 @@
+ {#if editing}
+   <Editor {item} oncancel={() => (editing = false)} onsaved={() => (editing = false)} />
+ {:else}
+-<div class="reader2">
++<div class={readerCls}>
+   <!-- Reading progress, fixed to viewport top -->
+   <div class="reader2-progress" aria-hidden="true"><div class="reader2-progress-fill" style="width:{progressBar}%"></div></div>
+ 
+@@ -324,6 +353,23 @@
+           <button class="tool-btn" onclick={() => adjustContentWidth(50)} title="Wider">W+</button>
+         </div>
+         <div class="reader2-tool-group">
++          <button
++            class="tool-btn"
++            class:active={outlineOpen}
++            onclick={toggleOutline}
++            title="Toggle outline (⌘\)"
++            aria-label="Toggle outline"
++            aria-pressed={outlineOpen}
++          >
++            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
++              <line x1="8" y1="6" x2="21" y2="6"/>
++              <line x1="8" y1="12" x2="21" y2="12"/>
++              <line x1="8" y1="18" x2="21" y2="18"/>
++              <circle cx="4" cy="6" r="1" fill="currentColor"/>
++              <circle cx="4" cy="12" r="1" fill="currentColor"/>
++              <circle cx="4" cy="18" r="1" fill="currentColor"/>
++            </svg>
++          </button>
+           <button class="tool-btn" onclick={toggleTheme} title="Toggle dark mode" aria-label="Toggle dark mode">
+             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+           </button>
+@@ -426,5 +472,15 @@
+       </div>
+     </div>
+   {/if}
++
++  <!-- Auto-TOC outline pane (ROADMAP v1.1 #3). Slide-in overlay; the
++       article column never moves when the pane opens, so the reader
++       doesn't shift. Mobile: full-width overlay. Desktop: fixed
++       280px-wide panel at the right edge. We hide it in slide mode
++       because the slide deck replaces the chapter DOM and the outline
++       would be empty. -->
++  {#if !inSlideMode}
++    <OutlinePane mdEl={mdEl} visible={outlineOpen} onclose={() => outlineVisible.set('0')} />
++  {/if}
+ </div>
+ {/if}
+
+================================================================================
+
+diff --git a/src/components/Settings.svelte b/src/components/Settings.svelte
+index 5642839..2a80102 100644
+--- a/src/components/Settings.svelte
++++ b/src/components/Settings.svelte
+@@ -59,9 +86,37 @@
+             <span class="settings-row-name">Folder</span>
+             <button class="btn-ghost" onclick={openFolder}>Open another folder…</button>
+           </div>
++          <div class="settings-row">
++            <span class="settings-row-name">Reopen last folder on launch</span>
++            <button
++              class="settings-toggle"
++              class:on={$reopenLast}
++              role="switch"
++              aria-checked={$reopenLast}
++              aria-label="Reopen last folder on launch"
++              data-test="reopen-last-toggle"
++              onclick={() => reopenLast.set(!$reopenLast)}
++            >
++              <span class="settings-toggle-knob"></span>
++            </button>
++          </div>
+         </div>
+       {/if}
+ 
++      <div class="settings-section" data-test-section="reset">
++        <div class="settings-row">
++          <span class="settings-row-name">
++            Reset all preferences
++            <span class="settings-row-hint">Restores theme, font, code theme, and reopen-last to their defaults.</span>
++          </span>
++          <button
++            class="btn-ghost"
++            data-test="reset-prefs-btn"
++            onclick={resetAllPrefs}
++          >Reset all prefs</button>
++        </div>
++      </div>
++
+       <div class="settings-foot">
+         <span class="settings-build">MD Reader · v1.0.0 · Local-only</span>
+         <button class="btn-primary" onclick={close}>Done</button>
+
+================================================================================
+
+diff --git a/src/components/SidebarTree.svelte b/src/components/SidebarTree.svelte
+index 0dd5ba0..01d55d0 100644
+--- a/src/components/SidebarTree.svelte
++++ b/src/components/SidebarTree.svelte
+@@ -1,6 +1,7 @@
+ <script>
+   import { route, progressMap, navOpen, goChapter } from '../lib/stores.js';
+   import { labelFromName, shortTitle } from '../lib/index.js';
++  import { chapterScrollFrac } from '../lib/stores/progress.js';
+   import Self from './SidebarTree.svelte';
+ 
+   let { nodes = [], depth = 0, filter = '' } = $props();
+@@ -32,6 +33,16 @@
+     const pr = $progressMap[node.item.diskPath] || {};
+     return { done: (pr.scroll || 0) >= 0.95, bookmarked: !!pr.bookmarked };
+   }
++  // ROADMAP v1.1 #13 — sidebar progress dot. For the chapter that
++  // matches the current route, we render a small ring whose stroke
++  // length is bound to the live scroll fraction from the Reader. For
++  // every other chapter we show the *persisted* scroll (so a chapter
++  // the user has half-read yesterday still shows a half ring).
++  function ringFrac(node) {
++    if (isCurrent(node)) return Math.max(0, Math.min(1, $chapterScrollFrac));
++    const pr = $progressMap[node.item.diskPath] || {};
++    return Math.max(0, Math.min(1, pr.scroll || 0));
++  }
+   function go(node) {
+     navOpen.set(false);
+     goChapter(node.item.navPath);
+@@ -48,6 +59,16 @@
+         title={labelFromName(node.name)}
+       >
+         <span class="sidebar-chapter-title">{shortTitle(node.name)}</span>
++        <span class="sidebar-progress" aria-hidden="true">
++          <svg viewBox="0 0 16 16" width="14" height="14">
++            <circle class="sidebar-progress-track" cx="8" cy="8" r="6.5" />
++            <circle
++              class="sidebar-progress-bar"
++              cx="8" cy="8" r="6.5"
++              style="stroke-dasharray: {Math.round(ringFrac(node) * 40.84)} 40.84"
++            />
++          </svg>
++        </span>
+         {#if status(node).bookmarked}<span class="bm">★</span>{:else if status(node).done}<span class="done">✓</span>{/if}
+       </button>
+     {:else}
+
+================================================================================
+
+diff --git a/src/lib/stores/library.js b/src/lib/stores/library.js
+index 472badf..484f376 100644
+--- a/src/lib/stores/library.js
++++ b/src/lib/stores/library.js
+
+================================================================================
+
+diff --git a/src/lib/stores/prefs.js b/src/lib/stores/prefs.js
+index c1212b8..6e49b2c 100644
+--- a/src/lib/stores/prefs.js
++++ b/src/lib/stores/prefs.js
+@@ -1,39 +1,105 @@
+ // Persisted UI preferences: theme, reading font size, content width, nav state.
+-import { writable } from 'svelte/store';
++import { writable, get } from 'svelte/store';
+ 
+ const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
++const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+ 
+-export const theme = writable(lsGet('md-reader-theme', 'light'));
+-export const fontSize = writable(lsGet('md-reader-fontsize', '')); // '', sm, lg, xl, xxl
+-export const contentWidth = writable(parseInt(lsGet('md-reader-content-width', '680'), 10) || 680);
++// ── Defaults ────────────────────────────────────────────────────────────────
++// Single source of truth for "what was the pref before the user touched it".
++// `resetAllPrefs()` restores every store to its matching default and clears
++// every `md-reader-*` localStorage key — see below.
++export const PREFS_DEFAULTS = Object.freeze({
++  theme: 'light',
++  fontSize: '',
++  contentWidth: 680,
++  navCollapsed: false,
++  viewMode: 'read',
++  codeTheme: 'github',   // 'github' (dual github-light/github-dark) | 'nord'
++  fontFamily: 'serif',   // 'serif' | 'sans' | 'mono'
++  reopenLast: true,
++  // Outline pane (ROADMAP v1.1 #3, owned by the outline-pane task).
++  // Tri-state: '1' (user-pinned open), '0' (user-pinned closed), 'auto'
++  // (follow the viewport).
++  outlineVisible: 'auto',
++});
++
++export const theme = writable(lsGet('md-reader-theme', PREFS_DEFAULTS.theme));
++export const fontSize = writable(lsGet('md-reader-fontsize', PREFS_DEFAULTS.fontSize));
++export const contentWidth = writable(parseInt(lsGet('md-reader-content-width', String(PREFS_DEFAULTS.contentWidth)), 10) || PREFS_DEFAULTS.contentWidth);
+ export const navCollapsed = writable(lsGet('md-reader-nav-collapsed', '0') === '1');
+ export const navOpen = writable(false); // mobile drawer
+ export const settingsOpen = writable(false); // settings modal
+-export const viewMode = writable(lsGet('md-reader-view-mode', 'read')); // 'read' | 'slide'
++export const viewMode = writable(lsGet('md-reader-view-mode', PREFS_DEFAULTS.viewMode));
++
++// ROADMAP v1.1 #8/#9/#10 — three new preferences hidden behind the Settings
++// panel until this commit. All three follow the same shape: writable store +
++// localStorage key + side effect on subscribe (data-attr / data-attr / nothing).
++export const codeTheme = writable(lsGet('md-reader-code-theme', PREFS_DEFAULTS.codeTheme));
++export const fontFamily = writable(lsGet('md-reader-font-family', PREFS_DEFAULTS.fontFamily));
++export const reopenLast = writable(lsGet('md-reader-reopen-last', '1') === '1');
++
++// ROADMAP v1.1 #3 — auto-TOC outline pane. Tri-state persistence so the
++// user can pin it open/closed or let it follow the viewport. Owned by
++// the outline-pane task; we only own the store + helpers.
++export const outlineVisible = writable(lsGet('md-reader-outline-visible', PREFS_DEFAULTS.outlineVisible));
++export function isOutlineVisible(storeValue, viewportWidth) {
++  if (storeValue === '1') return true;
++  if (storeValue === '0') return false;
++  // 'auto' or anything else → resolve from viewport. 1100px is the
++  // breakpoint the outline-pane task landed on for "wide enough".
++  const w = viewportWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1024);
++  return w >= 1100;
++}
++export function toggleOutline() {
++  outlineVisible.update((v) => {
++    if (v === 'auto') {
++      // First explicit toggle: invert the current viewport-resolved default.
++      const w = typeof window !== 'undefined' ? window.innerWidth : 1024;
++      return w >= 1100 ? '0' : '1';
++    }
++    return v === '1' ? '0' : '1';
++  });
++}
+ 
+ // Apply + persist prefs whenever they change.
+ if (typeof document !== 'undefined') {
+   theme.subscribe((v) => {
+     document.documentElement.setAttribute('data-theme', v);
+-    try { localStorage.setItem('md-reader-theme', v); } catch {}
++    lsSet('md-reader-theme', v);
+   });
+   fontSize.subscribe((v) => {
+     document.documentElement.setAttribute('data-font-size', v || '');
+-    try { localStorage.setItem('md-reader-fontsize', v || ''); } catch {}
++    lsSet('md-reader-fontsize', v || '');
+   });
+   contentWidth.subscribe((w) => {
+     const root = document.documentElement;
+     root.style.setProperty('--content-w', w + 'px');
+-    const base = w / 680;
++    const base = w / PREFS_DEFAULTS.contentWidth;
+     root.style.setProperty('--home-w', Math.round(980 * base) + 'px');
+     root.style.setProperty('--landing-w', Math.round(820 * base) + 'px');
+-    try { localStorage.setItem('md-reader-content-width', String(w)); } catch {}
++    lsSet('md-reader-content-width', String(w));
+   });
+   navCollapsed.subscribe((v) => {
+-    try { localStorage.setItem('md-reader-nav-collapsed', v ? '1' : '0'); } catch {}
++    lsSet('md-reader-nav-collapsed', v ? '1' : '0');
+   });
+   viewMode.subscribe((v) => {
+-    try { localStorage.setItem('md-reader-view-mode', v); } catch {}
++    lsSet('md-reader-view-mode', v);
++  });
++  // New prefs (#8 code theme, #9 font family, #10 reopen-last).
++  codeTheme.subscribe((v) => {
++    document.documentElement.setAttribute('data-code-theme', v);
++    lsSet('md-reader-code-theme', v);
++  });
++  fontFamily.subscribe((v) => {
++    document.documentElement.setAttribute('data-font-family', v);
++    lsSet('md-reader-font-family', v);
++  });
++  reopenLast.subscribe((v) => {
++    lsSet('md-reader-reopen-last', v ? '1' : '0');
++  });
++  // Outline pane (#3).
++  outlineVisible.subscribe((v) => {
++    lsSet('md-reader-outline-visible', v);
+   });
+ }
+ 
+@@ -62,3 +128,38 @@ export function adjustFontSize(delta) {
+ export function adjustContentWidth(delta) {
+   contentWidth.update((w) => Math.max(400, Math.min(1200, w + delta)));
+ }
++
++// ── Reset all prefs (#11) ───────────────────────────────────────────────────
++//
++// Wipes every `md-reader-*` key from localStorage and restores every store in
++// this file to its default. Designed as the "I'm stuck, get me out" button
++// the user can hit without understanding which knob they turned.
++//
++// We intentionally only touch prefs in this file (theme, font, layout, code
++// theme, reopen-last, outline) — NOT library state, progress, or recents.
++// Those have their own delete/clear paths; mixing them here would surprise
++// the user.
++export function resetAllPrefs() {
++  if (typeof localStorage === 'undefined') return;
++  // Wipe every md-reader-* key. Catch any other custom keys that may have
++  // been added by future code in this file.
++  for (let i = localStorage.length - 1; i >= 0; i--) {
++    const k = localStorage.key(i);
++    if (k && k.startsWith('md-reader-')) localStorage.removeItem(k);
++  }
++  // Restore every store. We do this after wiping so the .subscribe handlers
++  // (which write to localStorage) don't re-create the keys we just deleted.
++  theme.set(PREFS_DEFAULTS.theme);
++  fontSize.set(PREFS_DEFAULTS.fontSize);
++  contentWidth.set(PREFS_DEFAULTS.contentWidth);
++  navCollapsed.set(PREFS_DEFAULTS.navCollapsed);
++  viewMode.set(PREFS_DEFAULTS.viewMode);
++  codeTheme.set(PREFS_DEFAULTS.codeTheme);
++  fontFamily.set(PREFS_DEFAULTS.fontFamily);
++  reopenLast.set(PREFS_DEFAULTS.reopenLast);
++  outlineVisible.set(PREFS_DEFAULTS.outlineVisible);
++}
++
++// Re-export `get` so consumers don't have to import from svelte/store if
++// they only need to read prefs synchronously from a click handler.
++export { get };
+
+================================================================================
+
+diff --git a/src/lib/stores/progress.js b/src/lib/stores/progress.js
+index 8b008d4..99024c3 100644
+--- a/src/lib/stores/progress.js
++++ b/src/lib/stores/progress.js
+
+================================================================================
+
+diff --git a/src/lib/stores/state.js b/src/lib/stores/state.js
+index 611af4a..3e3088d 100644
+--- a/src/lib/stores/state.js
++++ b/src/lib/stores/state.js
+
+================================================================================
+
+diff --git a/src/lib/tauri.js b/src/lib/tauri.js
+index e1b8181..f8bb78a 100644
+--- a/src/lib/tauri.js
++++ b/src/lib/tauri.js
+@@ -41,3 +41,19 @@ export async function printPDF(title, chapterHtml, dark, vars) {
+ export async function updateExcalidrawBlock(folder, relPath, blockIndex, newInner) {
+   return invoke('update_excalidraw_block', { folder, relPath, blockIndex, newInner });
+ }
++
++/** Save a pasted clipboard image (PNG bytes) into `<folder>/<relPath>`,
++ *  creating the parent dir if missing. The Rust side rejects any `relPath`
++ *  that would escape the folder (same canonicalize check as `write_file`).
++ *  Returns the absolute path actually written. */
++export async function saveClipboardImage(folder, relPath, bytes) {
++  return invoke('save_clipboard_image', { folder, relPath, bytes: Array.from(bytes) });
++}
++
++/** Open `path` in the user's external editor. `editorOverride` is the
++ *  per-user setting from `md-reader-external-editor` localStorage; when
++ *  null/empty the Rust side falls back to the OS default (`open -t` /
++ *  `xdg-open` / `cmd /c start`). */
++export async function openInExternalEditor(path, editorOverride) {
++  return invoke('open_in_external_editor', { path, editorOverride: editorOverride || null });
++}
+
+================================================================================
+
