@@ -1,6 +1,9 @@
 import puppeteer from 'puppeteer-core';
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+// Chrome path: prefer the env var (set by CI to the platform-correct
+// install), fall back to the macOS dev-machine path.
+const CHROME = process.env.PUPPETEER_EXECUTABLE_PATH
+  || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const URL = 'http://localhost:1420?test=1';
 const results = [];
 const pass = (n) => { results.push(['PASS', n]); console.log('  ✓', n); };

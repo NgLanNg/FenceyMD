@@ -6,8 +6,20 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']   # tag pushes so `tauri-action` can publish GitHub Releases
   pull_request:
     branches: [main]
+  # Manual trigger — useful for re-running the bundle job for an
+  # existing tag (e.g. the bundle job failed on first try, or you
+  # want to re-publish a release after a CI fix). `inputs.tag_name`
+  # lets you re-run the release flow for a specific existing tag
+  # without deleting + re-pushing it.
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to build+release (e.g. v1.1.0). Leave empty for a plain build.'
+        required: false
+        type: string
 
 # Cancel in-progress runs of the same workflow on the same ref —
 # pushes to a PR while CI is running should restart, not queue.
@@ -45,7 +57,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
             build-essential \
@@ -65,37 +77,70 @@ jobs:
         run: npm run build
 
       - name: Cargo test
-        run: cd src-tauri && cargo test --all-features
+        # No features defined in Cargo.toml — `cargo test --all-features`
+        # would fail with "Package does not have these features: all".
+        # Default features are sufficient and run every test.
+        run: cd src-tauri && cargo test
+
+      # Serve the vite build on port 1420 (matching vite.config.js
+      # + the e2e test's `URL`). `vite preview` is a tiny static
+      # server over the `dist/` directory — no app code runs here,
+      # which is exactly what the e2e tests want.
+      - name: vite preview (background)
+        run: |
+          nohup npx vite preview --port 1420 --strictPort >/tmp/vite.log 2>&1 &
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -s -o /dev/null http://127.0.0.1:1420; then
+              echo "vite preview is up"
+              break
+            fi
+            sleep 1
+          done
+          if ! curl -s -o /dev/null http://127.0.0.1:1420; then
+            echo "::error::vite preview never came up"
+            cat /tmp/vite.log
+            exit 1
+          fi
 
       # e2e is browser-driven and the bundled .app is what ships, so
       # we run the JS-side e2e (puppeteer + Chrome) on the host. The
-      # desktop build is exercised by the `bundle` job below.
+      # desktop build is exercised by the `bundle` job below. Chrome
+      # is installed by `browser-actions/setup-chrome` on every runner
+      # (the `?test=1` mode in the app doesn't need a real GPU/audio,
+      # so headless Chrome is fine).
       - name: Install Chrome (e2e)
-        if: matrix.os != 'windows-latest'
-        run: |
-          if [ ! -d "/Applications/Google Chrome.app" ] && [ ! -f "/usr/bin/google-chrome" ]; then
-            echo "Chrome not preinstalled; skipping e2e on ${{ matrix.os }}"
-            exit 0
-          fi
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
 
       - name: e2e (puppeteer)
         run: |
-          if (ls /Applications/Google\ Chrome.app >/dev/null 2>&1 || [ -f /usr/bin/google-chrome ]) || command -v google-chrome >/dev/null; then
-            node e2e-test.mjs
+          # `e2e-test.mjs` reads PUPPETEER_EXECUTABLE_PATH and falls
+          # back to the macOS dev-machine path. Set the right path
+          # for the current runner so the e2e works on Linux too.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            export PUPPETEER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           else
-            echo "::warning::Chrome not found, skipping e2e on ${{ matrix.os }}"
+            # Windows: vite preview backgrounding is bash-only, and
+            # the e2e test's chrome path is macOS-shaped. Skip for
+            # now — the macOS + Linux coverage catches most regressions.
+            echo "::warning::Skipping e2e on Windows runner (path not configured)"
+            exit 0
           fi
+          node e2e-test.mjs
         shell: bash
 
   # ── 2. Desktop bundle build, matrix per platform ─────────────────────
   # Verifies the Tauri build chain end-to-end on each platform.
-  # Not gated on PR (slow + needs platform-specific runners), so we
-  # run on push to main and on tag.
+  # Runs on push to main (build only, no release) AND on tag push
+  # or workflow_dispatch with a tag (build + publish to GitHub
+  # Release via `tauri-action`).
   bundle:
     name: bundle (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     strategy:
       fail-fast: false
       matrix:
@@ -124,7 +169,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
             build-essential \
@@ -141,12 +186,25 @@ jobs:
         run: npm ci
 
       - name: Build desktop bundle
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Fenceymd {0}', github.ref_name) || '' }}
+          # Resolve the tag for the release: tag push uses github.ref_name;
+          # workflow_dispatch uses the user-supplied `tag_name` input.
+          # Empty string = no release (just a build).
+          tagName: >-
+            ${{
+              (startsWith(github.ref, 'refs/tags/') && github.ref_name) ||
+              (github.event_name == 'workflow_dispatch' && inputs.tag_name) ||
+              ''
+            }}
+          releaseName: >-
+            ${{
+              ((startsWith(github.ref, 'refs/tags/') && format('Fenceymd {0}', github.ref_name)) ||
+              (github.event_name == 'workflow_dispatch' && inputs.tag_name && format('Fenceymd {0}', inputs.tag_name)) ||
+              '')
+            }}
           releaseBody: |
             See [CHANGELOG](./CHANGELOG.md) for what changed.
             See [THIRD-PARTY-LICENSES](./THIRD-PARTY-LICENSES.md) for attributions.
