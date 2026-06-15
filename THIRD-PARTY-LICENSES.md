@@ -14,14 +14,14 @@ change and `git diff` the output.
 
 | Ecosystem | Total deps | Permissive (MIT/Apache/BSD/ISC/0BSD/Unlicense/Zlib/CC0/MIT-0/BSL) | Notable |
 |---|---:|---:|---:|
-| npm (production) | 445 | 443 | 2 |
-| Cargo | 527 | 518 | 9 |
+| npm (production) | 446 | 444 | 2 |
+| Cargo | 598 | 588 | 10 |
 
 ## npm — license distribution (top 20)
 
 | License | Count | % |
 |---|---:|---:|
-| MIT | 363 | 81.6% |
+| MIT | 364 | 81.6% |
 | ISC | 41 | 9.2% |
 | Apache-2.0 | 15 | 3.4% |
 | BSD-3-Clause | 9 | 2.0% |
@@ -33,8 +33,8 @@ change and `git diff` the output.
 | (MPL-2.0 OR Apache-2.0) | 1 | 0.2% |
 | EPL-2.0 | 1 | 0.2% |
 | BSD-2-Clause | 1 | 0.2% |
-| CC0-1.0 | 1 | 0.2% |
 | UNLICENSED | 1 | 0.2% |
+| CC0-1.0 | 1 | 0.2% |
 | Unlicense | 1 | 0.2% |
 | 0BSD | 1 | 0.2% |
 
@@ -43,29 +43,29 @@ change and `git diff` the output.
 
 | License | Count | % |
 |---|---:|---:|
-| MIT OR Apache-2.0 | 232 | 44.0% |
-| MIT | 124 | 23.5% |
-| Apache-2.0 OR MIT | 46 | 8.7% |
-| MIT/Apache-2.0 | 24 | 4.6% |
-| Unicode-3.0 | 18 | 3.4% |
-| Zlib OR Apache-2.0 OR MIT | 17 | 3.2% |
-| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 15 | 2.8% |
-| Unlicense OR MIT | 5 | 0.9% |
-| MPL-2.0 | 5 | 0.9% |
-| Apache-2.0/MIT | 4 | 0.8% |
-| ISC | 4 | 0.8% |
-| MIT OR Apache-2.0 OR Zlib | 4 | 0.8% |
-| Apache-2.0 | 3 | 0.6% |
-| BSD-3-Clause | 2 | 0.4% |
-| BSL-1.0 | 2 | 0.4% |
-| Zlib | 2 | 0.4% |
-| BSD-3-Clause OR Apache-2.0 | 2 | 0.4% |
-| BSD-3-Clause OR MIT OR Apache-2.0 | 2 | 0.4% |
-| MIT OR Apache-2.0 OR LGPL-2.1-or-later | 2 | 0.4% |
-| Unlicense/MIT | 2 | 0.4% |
+| MIT OR Apache-2.0 | 251 | 42.0% |
+| MIT | 149 | 24.9% |
+| Apache-2.0 OR MIT | 46 | 7.7% |
+| MIT/Apache-2.0 | 27 | 4.5% |
+| Zlib OR Apache-2.0 OR MIT | 27 | 4.5% |
+| Unicode-3.0 | 18 | 3.0% |
+| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 18 | 3.0% |
+| Apache-2.0 | 8 | 1.3% |
+| Unlicense OR MIT | 5 | 0.8% |
+| Apache-2.0/MIT | 5 | 0.8% |
+| MPL-2.0 | 5 | 0.8% |
+| ISC | 4 | 0.7% |
+| MIT OR Apache-2.0 OR Zlib | 4 | 0.7% |
+| BSD-3-Clause | 3 | 0.5% |
+| BSL-1.0 | 2 | 0.3% |
+| Zlib | 2 | 0.3% |
+| BSD-3-Clause OR Apache-2.0 | 2 | 0.3% |
+| BSD-3-Clause OR MIT OR Apache-2.0 | 2 | 0.3% |
+| MIT OR Apache-2.0 OR LGPL-2.1-or-later | 2 | 0.3% |
+| Unlicense/MIT | 2 | 0.3% |
 
 
-…and 11 more (see CSV).
+…and 14 more (see CSV).
 
 ## Notable licenses
 
@@ -80,7 +80,7 @@ a binary distribution. The full list is in the CSV.
 | `dompurify` | 3.4.7 | (MPL-2.0 OR Apache-2.0) |
 | `elkjs` | 0.9.3 | EPL-2.0 |
 
-### Cargo (9)
+### Cargo (10)
 
 | Crate | Version | License |
 |---|---|---|
@@ -92,6 +92,7 @@ a binary distribution. The full list is in the CSV.
 | `option-ext` | 0.2.0 | MPL-2.0 |
 | `r-efi` | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | `r-efi` | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
+| `ryu` | 1.0.23 | Apache-2.0 OR BSL-1.0 |
 | `selectors` | 0.36.1 | MPL-2.0 |
 
 ## One transitive dep under EPL-2.0
@@ -105,4 +106,4 @@ never pulls it in.
 
 ---
 
-_Generated: 2026-06-09 · 445 npm + 527 cargo deps_
+_Generated: 2026-06-15 · 446 npm + 598 cargo deps_
