@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Reader now refreshes on window focus (stale-content-after-background fix).**
+  macOS suspends the WKWebView while FenceyMD is backgrounded, so a
+  `library-changed` event the Rust watcher emits *while the app isn't frontmost*
+  could be dropped before the WebView processed it — you'd edit a file in your
+  editor or via an agent, switch back to FenceyMD, and still see the old
+  content. The watcher listener now also re-scans the open folder on
+  `visibilitychange`→visible and window `focus`, so the reader is current the
+  moment you look at it. A scan-signature guard (path + content-length per file)
+  makes a focus with no intervening edit a true no-op (no store churn, no
+  search-index rebuild). The watcher's index-apply logic was extracted into a
+  shared `applyLiveScan`. Verified end-to-end on a release build: backgrounded
+  the app, edited the open file on disk, brought the window forward → the edit
+  rendered.
+
 - **Keyboard shortcuts `⌘F` and `e` now actually work.** The README and the
   in-app cheatsheet both advertised `⌘F` (focus in-chapter find) and `e`
   (enter edit mode), but neither was wired in the Reader's `onKey` handler —

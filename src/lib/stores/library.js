@@ -274,21 +274,75 @@ export function siblingsOf(path) {
  */
 export async function setupWatcherListener() {
   if (!TAURI) return;
-  await listen('library-changed', (e) => {
-    const scan = e.payload;
-    // Ignore stale/foreign events: the watcher may still be firing for a
-    // folder the user has since closed or switched away from.
-    if (!scan || scan.root !== get(folderRoot)) return;
-    const idx = buildIndexFromRecords(scan.folder_name, scan.files);
-    folderName.set(idx.folderName);
-    folderMeta.set(idx.folderMeta);
-    groupMeta.set(idx.groupMeta);
-    // Re-index for cross-chapter search on every live-reload.
-    buildSearchIndex(idx.folderMeta);
-    // If the open chapter vanished, fall back home.
-    const r = get(route);
-    if (r.name === 'chapter' && !idx.folderMeta.some((f) => f.path === r.path)) {
-      route.set({ name: 'home' });
+  await listen('library-changed', (e) => applyLiveScan(e.payload));
+
+  // Refresh-on-focus safety net. macOS suspends the WKWebView while the
+  // window is backgrounded, so a `library-changed` event emitted by the Rust
+  // watcher *while FenceyMD isn't frontmost* can be dropped before the WebView
+  // processes it — the classic "I edited the file in my editor/agent, switched
+  // back to FenceyMD, and it still shows the old content" bug. When the window
+  // regains visibility/focus we re-scan the open folder once and reconcile, so
+  // the reader is always current the moment the user looks at it. Cheap: one
+  // `scan_path` round-trip, and `applyLiveScan` no-ops the stores if nothing
+  // changed (Svelte's `set` still fires, but identical content strings don't
+  // re-render the open chapter — see Reader's `$derived` chain).
+  const refreshOpenFolder = async () => {
+    const root = get(folderRoot);
+    if (!root) return;
+    try {
+      const scan = await invoke('scan_path', { path: root });
+      applyLiveScan(scan);
+    } catch (e) {
+      dlog('[refresh-on-focus] scan failed', e?.message || String(e));
     }
-  });
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshOpenFolder();
+    });
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', refreshOpenFolder);
+  }
+}
+
+// Signature of the last scan we applied, so a refresh-on-focus that finds
+// nothing changed is a true no-op (no store churn, no search-index rebuild,
+// no spurious chapter re-render). Path + content-length per file is enough to
+// catch any edit/add/remove without hashing whole bodies.
+let _lastScanSig = null;
+function scanSignature(scan) {
+  return `${scan.root} ${(scan.files || [])
+    .map((f) => `${f.path}:${(f.content || '').length}`)
+    .join('')}`;
+}
+
+/**
+ * Apply a fresh scan of the open folder to the in-memory indexes. Shared by the
+ * Rust `library-changed` watcher event and the refresh-on-focus handler.
+ * Ignores stale/foreign scans (a folder the user has since closed or switched
+ * away from) and no-ops when the scan is identical to the last one applied. If
+ * the open chapter vanished from disk, routes home.
+ * @param {{root: string, folder_name: string, files: Array}} scan
+ */
+function applyLiveScan(scan) {
+  // Ignore stale/foreign events: the watcher may still be firing for a
+  // folder the user has since closed or switched away from.
+  if (!scan || scan.root !== get(folderRoot)) return;
+  // Skip redundant work when nothing actually changed (the common case for a
+  // plain window-focus with no intervening edit).
+  const sig = scanSignature(scan);
+  if (sig === _lastScanSig) return;
+  _lastScanSig = sig;
+  const idx = buildIndexFromRecords(scan.folder_name, scan.files);
+  folderName.set(idx.folderName);
+  folderMeta.set(idx.folderMeta);
+  groupMeta.set(idx.groupMeta);
+  // Re-index for cross-chapter search on every live-reload.
+  buildSearchIndex(idx.folderMeta);
+  // If the open chapter vanished, fall back home.
+  const r = get(route);
+  if (r.name === 'chapter' && !idx.folderMeta.some((f) => f.path === r.path)) {
+    route.set({ name: 'home' });
+  }
 }
