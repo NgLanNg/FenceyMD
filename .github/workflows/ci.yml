@@ -63,7 +63,12 @@ jobs:
             build-essential \
             curl \
             wget \
-            file
+            file \
+            # xcap (window-capture crate) needs X11/xcb system libs on Linux.
+            # Without these, `cargo test` fails to link on Linux runners.
+            libx11-dev \
+            libxcb1-dev \
+            libxrandr-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -88,15 +93,20 @@ jobs:
       # which is exactly what the e2e tests want.
       - name: vite preview (background)
         run: |
-          nohup npx vite preview --port 1420 --strictPort >/tmp/vite.log 2>&1 &
+          # `--host 127.0.0.1` forces IPv4 binding. Without it, vite
+          # binds to IPv6 localhost on some runners, and `curl
+          # http://127.0.0.1:1420` returns HTTP 000 (nothing
+          # listening on the v4 loopback) → false-positive "never
+          # came up" failure on macOS.
+          nohup npx vite preview --port 1420 --strictPort --host 127.0.0.1 >/tmp/vite.log 2>&1 &
           for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -s -o /dev/null http://127.0.0.1:1420; then
+            if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:1420/ | grep -qE '^(2|3)[0-9][0-9]$'; then
               echo "vite preview is up"
               break
             fi
             sleep 1
           done
-          if ! curl -s -o /dev/null http://127.0.0.1:1420; then
+          if ! curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:1420/ | grep -qE '^(2|3)[0-9][0-9]$'; then
             echo "::error::vite preview never came up"
             cat /tmp/vite.log
             exit 1
@@ -175,7 +185,12 @@ jobs:
             build-essential \
             curl \
             wget \
-            file
+            file \
+            # xcap (window-capture crate) needs X11/xcb system libs on Linux.
+            # Without these, `cargo test` fails to link on Linux runners.
+            libx11-dev \
+            libxcb1-dev \
+            libxrandr-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
