@@ -167,7 +167,7 @@ export async function mcpStatus() {
  */
 export async function agentsDetect() {
   if (!TAURI) return [];
-  try { return await invoke('agents_detect'); } catch { return []; }
+  try { return (await invoke('agents_detect')) ?? []; } catch { return []; }
 }
 
 /**
@@ -184,4 +184,19 @@ export async function agentsRegister(id) {
 export async function agentsUnregister(id) {
   if (!TAURI) throw new Error('agent registration requires the desktop app');
   return invoke('agents_unregister', { id });
+}
+
+/**
+ * Whether the `fenceymd` CLI is installed on PATH and points at this build.
+ * Shape: `{ installed, path, points_at_current }`. Empty default outside Tauri.
+ */
+export async function cliStatus() {
+  if (!TAURI) return { installed: false };
+  try { return (await invoke('cli_status')) ?? { installed: false }; } catch { return { installed: false }; }
+}
+
+/** Install (or re-point) the `fenceymd` CLI symlink; returns the path. Throws on failure. */
+export async function cliInstall() {
+  if (!TAURI) throw new Error('CLI install requires the desktop app');
+  return invoke('cli_install');
 }

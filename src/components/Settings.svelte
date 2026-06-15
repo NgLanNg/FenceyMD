@@ -1,5 +1,8 @@
 <script>
-  import { TAURI, debugLogReveal, debugLogClear } from '../lib/tauri.js';
+  import {
+    TAURI, debugLogReveal, debugLogClear,
+    agentsDetect, agentsRegister, agentsUnregister, cliStatus, cliInstall,
+  } from '../lib/tauri.js';
   import {
     theme, fontSize, contentWidth, fontSizeLabels, settingsOpen,
     adjustFontSize, adjustContentWidth, pickFolder,
@@ -27,6 +30,56 @@
   async function clearDebugLog() {
     if (!TAURI) return;
     await debugLogClear();
+  }
+
+  // ── AI agent control (MCP) ──────────────────────────────────────────────
+  // The detected agents + their registration state, and the `fenceymd` CLI
+  // install status. Loaded from Rust each time the dialog opens so the toggles
+  // reflect on-disk truth.
+  let agents = $state([]);
+  let agentBusy = $state('');   // id currently toggling
+  let agentError = $state('');
+  let cli = $state({ installed: false });
+  let cliBusy = $state(false);
+
+  async function loadAgentControl() {
+    if (!TAURI) return;
+    agents = await agentsDetect();
+    cli = await cliStatus();
+  }
+
+  // Re-read on-disk truth whenever the dialog opens.
+  $effect(() => {
+    if ($settingsOpen) loadAgentControl();
+  });
+
+  async function toggleAgent(agent) {
+    if (agentBusy) return;
+    agentBusy = agent.id;
+    agentError = '';
+    try {
+      if (agent.registered) await agentsUnregister(agent.id);
+      else await agentsRegister(agent.id);
+      agents = await agentsDetect();
+    } catch (e) {
+      agentError = e?.message || String(e);
+    } finally {
+      agentBusy = '';
+    }
+  }
+
+  async function installCli() {
+    if (cliBusy) return;
+    cliBusy = true;
+    agentError = '';
+    try {
+      await cliInstall();
+      cli = await cliStatus();
+    } catch (e) {
+      agentError = e?.message || String(e);
+    } finally {
+      cliBusy = false;
+    }
   }
 </script>
 
@@ -109,6 +162,61 @@
             <span class="settings-row-name">Folder</span>
             <button class="btn-ghost" onclick={openFolder}>Open another folder…</button>
           </div>
+        </div>
+      {/if}
+
+      {#if TAURI}
+        <div class="settings-section" data-test-section="agents">
+          <div class="settings-label">AI agent control</div>
+          <span class="settings-row-hint" style="display:block; margin-bottom: var(--space-3);">
+            Let an AI coding agent (Claude Code, Gemini, OpenCode, Codex) drive this
+            reader over MCP. Toggling writes the <code>fenceymd</code> MCP entry into
+            that agent's own config. <strong>Restart the agent to apply.</strong>
+          </span>
+
+          <div class="settings-row">
+            <span class="settings-row-name">
+              Terminal CLI
+              <span class="settings-row-hint">
+                {#if cli.installed && cli.points_at_current}
+                  Installed — <code>{cli.path}</code>
+                {:else if cli.installed}
+                  At <code>{cli.path}</code>, but pointing elsewhere — re-install to update.
+                {:else}
+                  Makes <code>fenceymd</code> runnable from a terminal; agent configs then use a clean <code>fenceymd</code> command.
+                {/if}
+              </span>
+            </span>
+            <button class="btn-ghost" disabled={cliBusy} data-test="cli-install-btn" onclick={installCli}>
+              {cliBusy ? 'Installing…' : (cli.installed && cli.points_at_current ? 'Re-install' : 'Install CLI')}
+            </button>
+          </div>
+
+          {#each agents as agent (agent.id)}
+            <div class="settings-row">
+              <span class="settings-row-name">
+                {agent.display_name}
+                {#if !agent.detected}
+                  <span class="settings-row-hint">Not detected on this machine — toggle on to register anyway.</span>
+                {/if}
+              </span>
+              <button
+                class="settings-toggle"
+                class:on={agent.registered}
+                role="switch"
+                aria-checked={agent.registered}
+                aria-label={`Register FenceyMD with ${agent.display_name}`}
+                data-test={`agent-toggle-${agent.id}`}
+                disabled={agentBusy === agent.id}
+                onclick={() => toggleAgent(agent)}
+              >
+                <span class="settings-toggle-knob"></span>
+              </button>
+            </div>
+          {/each}
+          {#if agentError}
+            <div class="settings-row-hint" style="color: var(--tertiary);">{agentError}</div>
+          {/if}
         </div>
       {/if}
 

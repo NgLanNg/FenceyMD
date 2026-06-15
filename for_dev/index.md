@@ -59,6 +59,7 @@ If you're grepping the codebase for the brand name, search for `FenceyMD` (displ
 - [MCP tool: capture_screenshot](feature_mcp_capture_screenshot.md) — agent grabs the live view
 - [MCP tool: get_debug_log](feature_mcp_debug_log.md) — agent reads the activity log
 - [Agent auto-registration](feature_agent_registration.md) — Settings toggle wires the agent config
+- [`fenceymd` CLI install](feature_cli_install.md) — binary on PATH, available right after install
 
 ### Settings
 - [Settings panel](feature_settings.md) — theme, font, code theme, width, reset

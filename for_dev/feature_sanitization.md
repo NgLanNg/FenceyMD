@@ -15,7 +15,7 @@ Mermaid runs with `securityLevel: 'strict'` (a separate, internal hardening).
 
 **When.** Every render. The chapter body is sanitized once per render; the html/svg fences are sanitized inside their respective renderers.
 
-**Where.** `src/lib/sanitize.js` is the central module. It exports `sanitizeBody(html)`, `sanitizeHtmlFence(html)`, `sanitizeSvgFence(svg)`.
+**Where.** `src/lib/sanitize.js` is the central module. It exports `sanitizeHtml(html)` (used for the chapter body and the ` ```html ` fence) and `sanitizeSvg(svg)` (the ` ```svg ` fence), and default-exports DOMPurify.
 
 **How (acceptance / DoD).**
 - A `<script>alert(1)</script>` injected into a chapter body is stripped before reaching the DOM.

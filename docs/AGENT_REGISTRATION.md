@@ -5,6 +5,9 @@ FenceyMD runs a local-only MCP server while it's open, so AI coding agents
 read content, see the user's selection. This doc covers **how an agent gets
 connected**.
 
+> **New here?** Start with the step-by-step **[MCP_SETUP.md](MCP_SETUP.md)**
+> walkthrough. This page is the per-agent schema reference for manual setup.
+
 ## The easy way: the Settings toggle (recommended)
 
 Open **Settings → AI agent control** and flip the toggle for each agent you
@@ -39,8 +42,11 @@ FenceyMD self-heals registered configs on next launch.)
 ## The manual way (fallback / other agents)
 
 If you'd rather edit configs by hand, or your agent isn't in the toggle list,
-use the shapes below. `<APP>` is the absolute path to the FenceyMD binary
-(macOS: `/Applications/FenceyMD.app/Contents/MacOS/fenceymd`). The schemas
+use the shapes below. `<APP>` is the command that launches the bridge: once the
+`fenceymd` CLI is installed (first launch, or Settings → AI agent control →
+Install CLI) use just **`fenceymd`**; otherwise the absolute path to the binary
+(macOS: `/Applications/FenceyMD.app/Contents/MacOS/fenceymd`). The Settings
+toggle picks `fenceymd` automatically when the CLI is present. The schemas
 differ per agent — match them exactly or the entry is silently ignored.
 
 ### Claude Code — `~/.claude.json` (root-level `mcpServers` = user scope)

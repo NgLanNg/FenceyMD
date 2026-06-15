@@ -50,6 +50,9 @@ use tauri::async_runtime as tauri_async;
 mod mcp;
 // One-click registration of FenceyMD into each AI agent's MCP config.
 mod agents;
+// `fenceymd` CLI install (symlink onto PATH) so the binary is runnable as a
+// command and agent configs can use `command: "fenceymd"`.
+mod cli;
 use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
 
@@ -1937,6 +1940,26 @@ fn main() {
         return;
     }
 
+    // Explicit CLI (re)install/repair: `fenceymd --install-cli` symlinks the
+    // binary onto PATH and exits, printing the path. The app also does this
+    // automatically on first launch; this subcommand is for manual repair (e.g.
+    // after moving the app) and is the headless way to verify the install.
+    if std::env::args().any(|a| a == "--install-cli") {
+        match std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| cli::install_cli(&exe))
+        {
+            Ok(p) => {
+                println!("installed: {}", p.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("install failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     tauri::Builder::default()
         .manage::<WatcherState>(Mutex::new(None))
         .setup(|app| {
@@ -1956,6 +1979,23 @@ fn main() {
             tauri_async::spawn(async move {
                 mcp::start(app_handle).await;
             });
+            // Make the `fenceymd` CLI available on PATH (symlink into the first
+            // writable well-known bin dir) so users can run it from a terminal
+            // and agent configs use a clean `command: "fenceymd"`. First launch
+            // is our only install hook — a .dmg drag-install can't run code.
+            // Release-only and never from a build tree, so `cargo tauri dev`
+            // can't symlink its debug binary over a real install. Best-effort.
+            if !cfg!(debug_assertions) {
+                if let Ok(exe) = std::env::current_exe() {
+                    if !exe.to_string_lossy().contains("/target/") {
+                        let h = app.handle().clone();
+                        match cli::install_cli(&exe) {
+                            Ok(p) => log_from_rust(&h, &format!("[cli] fenceymd -> {}", p.display())),
+                            Err(e) => log_from_rust(&h, &format!("[cli] install skipped: {e}")),
+                        }
+                    }
+                }
+            }
             // Self-heal any agent registrations the user previously
             // enabled: if the app binary moved (update / drag to a new
             // path), rewrite the stored command to the current path.
@@ -1994,6 +2034,8 @@ fn main() {
             agents::agents_detect,
             agents::agents_register,
             agents::agents_unregister,
+            cli::cli_install,
+            cli::cli_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

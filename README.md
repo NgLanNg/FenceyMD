@@ -70,16 +70,20 @@ editing.
 - **Keyboard.** ← / → between chapters. ⌘F in-chapter search.
   ⌘P PDF export. e to edit. Esc to clear.
 - **AI-agent control (MCP).** A local MCP server (JSON-RPC over
-  HTTP, bound to `127.0.0.1`) exposes the same five things the
-  UI can do — `open_file`, `get_current_chapter`,
-  `get_chapter_content`, `get_selected_text`, `get_book_toc` —
-  to any agent that speaks MCP. Stdio-only agents connect via the
-  app's own `--mcp-bridge` subcommand (native, no Node), which
-  discovers the port on each connection so the config survives
-  restarts; HTTP-native agents (Antigravity, OpenCode, Gemini CLI)
-  can point directly at `http://127.0.0.1:PORT/mcp`. Writes stay
-  inside the folder; path-traversal is rejected in Rust. See
-  [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md) and
+  HTTP, bound to `127.0.0.1`) lets an AI agent drive the reader via
+  seven tools — `open_file`, `get_current_chapter`,
+  `get_chapter_content`, `get_selected_text`, `get_book_toc`,
+  `capture_screenshot` (the live view as a PNG for a vision LLM),
+  and `get_debug_log`. Connect an agent with **one toggle in
+  Settings → AI agent control** (Claude Code, Gemini, OpenCode,
+  Codex); it wires that agent's config to the app's native
+  `--mcp-bridge` subcommand (no Node, survives restarts).
+  HTTP-native agents can point directly at `http://127.0.0.1:PORT/mcp`.
+  Writes stay inside the folder; path-traversal is rejected in Rust.
+  View-changing tools (`open_file`, `capture_screenshot`) act on the
+  live window, so it must be visible; the read-only data tools work
+  regardless. See [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md),
+  [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md), and
   chapter 13 of the bundled demo for the full tour.
 
 ---
@@ -147,8 +151,9 @@ npm run build:desktop   # → .app + .dmg (mac) / .msi + .exe (win) / .deb + .Ap
    published to a `port` file in the app-data dir
    (`~/Library/Application Support/com.fenceymd.app/port` on macOS)
    and rediscovered on each connection, so the config survives
-   restarts. See [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md)
-   for manual setup, and the bundled chapter
+   restarts. See [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md) for the
+   step-by-step setup guide (and [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md)
+   for per-agent config details), or the bundled chapter
    [13 — Agent Control](demo/13-agent-control.md) for the tour.
 
 The bundled [`demo/`](demo/) is a 14-chapter self-introducing
@@ -166,6 +171,9 @@ tour of every feature. Load it with `?test=1`.
   recipes for common failures.
 - [`DEVLOOP.md`](DEVLOOP.md) — the working loop for changes (build,
   e2e, cargo, bundle, confirm).
+- [`STRUCTURE.md`](STRUCTURE.md) — codebase directory structure, files, and architectural map.
+- [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md) — step-by-step guide to
+  connecting an AI agent (the "start here" for MCP).
 - [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md) —
   per-agent MCP config snippets (Claude Code, Antigravity,
   OpenCode, Gemini CLI, Codex). Required reading before plugging

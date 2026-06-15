@@ -1146,7 +1146,33 @@ async fn tool_capture_screenshot(state: &ServerState, id: Value) -> JsonRpcRespo
     // The .app itself is the only one running under our bundle id,
     // so the pid check is sufficient — but we also try app_name
     // for cross-platform safety.
+    //
+    // Force the main window to front before enumerating. xcap's
+    // `Window::all()` is unreliable for background windows on macOS
+    // (it uses `kCGWindowListOptionOnScreenOnly`, which excludes
+    // windows that haven't been "activated" on SkyLight). Without
+    // this, an agent calling `capture_screenshot` from a terminal
+    // will get "FenceyMD window not found" about half the time.
+    // Bringing the window to front first makes the tool self-
+    // contained — no external `osascript activate` needed.
+    //
+    // `set_focus` queues an event on the AppKit run loop; the
+    // window doesn't appear in `CGWindowListCopyWindowInfo` for a
+    // few hundred ms after. Poll briefly so the first call after
+    // launch also works (otherwise only calls 2+ succeed and the
+    // first one always errors).
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
     let pid = std::process::id();
+    // Brief settle window: macOS window-server activation is async.
+    // 300 ms is enough for the focus event to reach SkyLight and the
+    // NSWindow to register on the on-screen list. Total worst-case
+    // tool latency: ~300ms — well under the user's perception
+    // threshold for a screenshot.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let windows = match xcap::Window::all() {
         Ok(w) => w,
         Err(e) => {

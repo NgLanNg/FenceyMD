@@ -76,12 +76,22 @@
     if (TAURI) {
       const { listen } = await import('./lib/tauri.js');
       const { goChapter, mcpSessionContext, openScanResult } = await import('./lib/stores.js');
-      const unlisten = await listen('mcp-navigate', (e) => {
+      const unlisten = await listen('mcp-navigate', async (e) => {
         const path = e?.payload;
-        if (typeof path === 'string' && path.length) {
-          try { goChapter(path); }
-          catch (err) { console.warn('[mcp] goChapter failed:', err); }
-        }
+        if (typeof path !== 'string' || !path.length) return;
+        try {
+          // Rust emits the disk-relative path, but the renderer routes by
+          // the group-stripped `item.path`. For a nested chapter (e.g.
+          // `docs/setup.md`) the two differ, so routing the raw path sets
+          // the title but the body lookup misses -> "Content not available".
+          // Translate via folderMeta (same mapping the `mcp-folder-changed`
+          // handler does); top-level files where diskPath === path are
+          // unaffected.
+          const { get } = await import('svelte/store');
+          const { folderMeta } = await import('./lib/stores.js');
+          const item = get(folderMeta).find((f) => f.diskPath === path);
+          goChapter(item?.path || path);
+        } catch (err) { console.warn('[mcp] goChapter failed:', err); }
       });
       // Listen for `mcp:session-context` so the Svelte store mirrors
       // whatever the Rust side stashed. Phase 2's sidebar chat will

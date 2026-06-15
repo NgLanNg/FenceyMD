@@ -1806,7 +1806,12 @@ html[data-font-size="xxl"] .chapter-markdown { font-size: 1.5rem; }
   background: var(--surface); border: 1px solid var(--surface-variant);
   border-radius: var(--radius-lg);
   box-shadow: 0 12px 40px rgba(0,0,0,0.18);
-  overflow: hidden;
+  /* Cap to the viewport and scroll internally so every section — and the
+     close button — stays reachable on short screens / with many sections.
+     Without this the centered dialog overflows and its header is pushed
+     above the top edge, unclickable. */
+  max-height: calc(100vh - 2 * var(--space-6));
+  overflow-y: auto;
 }
 .settings-head {
   display: flex; align-items: center; justify-content: space-between;

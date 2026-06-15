@@ -20,7 +20,7 @@
 - A multi-instance window gets a per-pid port file (`port-<pid>`) so a second window doesn't clobber the first.
 - On graceful close, the port file is removed.
 - On startup, the existing port file is checked for staleness; if the previous pid is dead, the file is overwritten.
-- The five core tools work: `open_file`, `get_current_chapter`, `get_chapter_content`, `get_selected_text`, `get_book_toc`.
+- The seven tools work: `open_file`, `get_current_chapter`, `get_chapter_content`, `get_selected_text`, `get_book_toc`, `capture_screenshot`, `get_debug_log`.
 - Path traversal is rejected with error code -32001.
 - All file operations are bounded to the active folder.
 - The connection is local-only; no network egress.

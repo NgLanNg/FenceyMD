@@ -6,7 +6,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-15
+
 ### Added
+- **`fenceymd` CLI on PATH.** The app makes its binary runnable as `fenceymd`
+  from a terminal by symlinking it into the first writable well-known bin dir
+  (Homebrew's `bin`, `/usr/local/bin`, then `~/.local/bin`/`~/bin`). Installed
+  automatically on **first launch** (release builds; a `.dmg` drag can't run
+  code, so first launch is the hook), plus a **Settings → AI agent control →
+  Install CLI** button and an `--install-cli` flag on the app binary for manual
+  repair — run it by full path the first time
+  (`/Applications/FenceyMD.app/Contents/MacOS/fenceymd --install-cli`), since
+  `fenceymd` isn't on PATH until the install runs. Once the CLI is present, agent
+  registrations use a clean `command: "fenceymd"` instead of the deep
+  `…/FenceyMD.app/Contents/MacOS/fenceymd` path, and `refresh_registrations`
+  upgrades older absolute-path entries on launch. New `cli.rs` module
+  (6 unit tests covering symlink install, idempotency, stale-symlink replace,
+  never-clobber-a-real-file, candidate fall-through). Verified live: `fenceymd
+  --mcp-bridge` round-trips `tools/list` against the running app.
+- **MCP setup guide** (`docs/MCP_SETUP.md`) — a step-by-step "start here" walkthrough
+  (run with a folder open → toggle the agent in Settings → restart it → verify),
+  the 7-tool table, a terminal smoke test, and troubleshooting. Cross-linked from
+  the README and `AGENT_REGISTRATION.md` (which remains the per-agent schema
+  reference). Doc corrections in the same pass: `feature_mcp_server.md`
+  (five → seven tools), `feature_mcp_capture_screenshot.md` (window match
+  `md reader` → `fenceymd`, ≤1600px downscale, occluded-window blank-capture
+  limitation), `feature_sanitization.md` (actual exported fn names).
 - **One-click agent registration (Settings → AI agent control).** A per-agent
   toggle writes FenceyMD's `fenceymd` MCP entry into each agent's own config
   — Claude Code (`~/.claude.json`, `type:"stdio"`), Gemini CLI / Antigravity
@@ -113,6 +138,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   editor-command setting (defense-in-depth; spawned without a shell).
 
 ### Fixed
+- **Restored the "AI agent control" Settings section.** The per-agent toggle UI
+  (and now the CLI install row) had been dropped from `Settings.svelte` during
+  the rebrand, leaving the `agents_*` Rust commands + JS wrappers orphaned with
+  no way to reach them. Re-added, wired to `agents_detect`/`agents_register`/
+  `agents_unregister` + `cli_status`/`cli_install`.
+- **Settings dialog now scrolls.** It was `overflow: hidden` with no
+  `max-height` while vertically centered, so a tall dialog (many sections / a
+  short screen) pushed its header — and the close button — above the viewport,
+  unreachable. Capped to the viewport with internal scroll.
+- **Autosave no longer closes the editor.** The `selfSaveSeq` signal that tells
+  the reader "this content change is my own save, stay open" was defined but
+  never incremented, so every autosave (and ⌘S) closed the editor mid-edit. The
+  editor now bumps `selfSaveSeq` before each save and the reader reads it
+  *untracked* (so the bump can't fire the close-effect early and consume the
+  signal). e2e #29 was hardened to fail if the editor closes on autosave.
+- **MCP `open_file` to a nested chapter** showed "Content not available." The
+  `mcp-navigate` handler routed the raw disk-relative path, but the renderer
+  keys chapters by the group-stripped `item.path`; for a nested file (e.g.
+  `docs/setup.md`) the route set the title while the body lookup missed. It now
+  translates `diskPath → item.path` via `folderMeta` (the same mapping the
+  `mcp-folder-changed` handler already used). Top-level files are unaffected.
+- **MCP `get_current_chapter` returned `No such file or directory`** after
+  `open_file` to a nested chapter. The Reader's view-state $effect was
+  pushing `current_chapter_path: path` (the group-stripped key) to the Rust
+  MCP server, which then joined it to the active folder root — for
+  `desktop-app/docs/MCP_SETUP.md` it tried `<root>/docs/MCP_SETUP.md`
+  (missing the `desktop-app/` prefix). It now pushes `item?.diskPath || path`
+  (the full on-disk relative path) — the same pattern used everywhere else
+  in `Reader.svelte` (progress keys, link resolution, content enhancement).
+  Verified: `open_file` on a nested file → `get_current_chapter` returns
+  the chapter's preview and word count; the screenshot of the running app
+  shows the chapter rendered (not the home view).
+- **MCP `capture_screenshot` returned "FenceyMD window not found"** on the
+  first call after launch (about half the time even after a GUI launch).
+  xcap's `Window::all()` uses `kCGWindowListOptionOnScreenOnly`, which
+  excludes windows that haven't been activated on SkyLight's active list.
+  The tool now calls `unminimize()` + `show()` + `set_focus()` on the Tauri
+  `WebviewWindow`, then `tokio::time::sleep(300ms)` before enumerating. The
+  settle is the async window-server activation delay; the first call after
+  launch used to always error, now it works. Total tool latency is ~500ms
+  (300ms settle + ~200ms capture/encode). No external `osascript activate`
+  needed. Verified: 10 consecutive `capture_screenshot` calls right after
+  a fresh `open /Applications/FenceyMD.app` all returned valid PNGs.
 - **In-chapter Find** silently skipped matches: a `/g` regex's `lastIndex`
   advanced across text nodes. Reset before each membership test.
 - **Reading-progress data loss**: a single shared debounce timer meant
@@ -127,6 +195,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dark mode. Wide CSV/markdown tables wrap instead of clipping; tall diagrams
   scale to fit one page instead of being cut off.
 - **`watch_folder`** recovers from a poisoned mutex instead of panicking.
+- **First-launch CLI install could create a self-referential symlink** if
+  `current_exe()` returned the symlink path (e.g. the app was launched via
+  `fenceymd` from a terminal, the dock stored a relative path, or some
+  Apple-event pathway resolved through the existing symlink). The result:
+  `which fenceymd` finds nothing and any call returns "too many levels of
+  symbolic links". `install_into` now canonicalizes the exe and rejects
+  self-references before creating a symlink, with a new test
+  (`refuses_self_referential_symlink`) covering the case. The existing
+  idempotent-reinstall path is preserved (the guard only fires on create,
+  not on verify-already-correct). Recovery: `rm /opt/homebrew/bin/fenceymd
+  && /Applications/FenceyMD.app/Contents/MacOS/fenceymd --install-cli`.
 - **Failed fence renders** (offline lazy-load, bad diagram syntax) now show an
   inline notice and keep the source visible, instead of failing silently.
 
@@ -200,5 +279,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start with `"language-"`). `collectBlocks` now scans all
   `pre code` and filters by class token.
 
-[Unreleased]: https://github.com/NgLanNg/fenceymd/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/NgLanNg/fenceymd/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/NgLanNg/fenceymd/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/NgLanNg/fenceymd/releases/tag/v1.0.0

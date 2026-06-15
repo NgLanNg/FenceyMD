@@ -745,20 +745,17 @@ anchorOk
 // ── 29. ⌘S autosave + saved indicator (ROADMAP v1.1 #14) ──────────────────
 // Open the editor, focus it, type a character. Within the 5-second
 // debounce window the indicator should read "Unsaved" (or "Saving…"
-// if a save was already in flight). After the debounce fires, the
-// global `lastSavedAt` writable should hold a recent timestamp —
-// that's the proof the autosave save() call ran end-to-end. The
-// indicator's "Saved" text is checked too IF the editor is still
-// mounted (see "Known issue" below).
+// if a save was already in flight). After the debounce fires we assert
+// BOTH: (1) the global `lastSavedAt` writable holds a recent timestamp
+// (proof the autosave save() ran end-to-end), AND (2) the editor stays
+// OPEN with the indicator reading "Saved …".
 //
-// KNOWN ISSUE: the implementation's `save()` calls `onsaved?.()` at
-// the end, and `onsaved` is wired by the Reader to `editing = false`.
-// The autosave timer calls `save()` directly — so a successful
-// autosave ALSO closes the editor (because onsaved fires). The
-// indicator element is then unmounted. The test detects this
-// condition, records it as a real defect, and still PASSes the test
-// on the basis of `lastSavedAt` being set (which is the only
-// non-DOM-evidence we have that save() actually completed).
+// REGRESSION GUARD: autosave's `save({silent:true})` must NOT close the
+// editor. The Editor bumps `selfSaveSeq` before writing, and the Reader
+// reads it untracked so it recognizes the folderMeta→html change as its
+// own and keeps editing. This used to close the editor on every autosave
+// (selfSaveSeq was defined but never incremented) — if the editor closes
+// here again, that bug is back, so we FAIL rather than tolerate it.
 {
   const editBtn29 = await page.$('button[title="Edit markdown"]');
   if (!editBtn29) { fail('Autosave', 'edit button not present'); }
@@ -802,16 +799,12 @@ anchorOk
       const storeOk = typeof lastSavedAt === 'number' && lastSavedAt > 0 && (now - lastSavedAt) < 60_000;
       // Label is checked only if the editor is still open. If it closed,
       // we trust the store as the source of truth.
-      const labelOk = after === null || /^Saved(\s+just\s+now|\s+\d+s\s+ago)?$/.test(after);
-      if (labelOk && storeOk) {
-        if (after !== null) {
-          pass(`Autosave fires after 5s debounce (indicator="${after}", lastSavedAt=${lastSavedAt}, ${Math.round((now - lastSavedAt) / 1000)}s ago)`);
-        } else {
-          // Editor closed on autosave (defect). Still PASS because
-          // lastSavedAt was set — the autosave path ran. The closing
-          // behavior is recorded in the deliverable.
-          pass(`Autosave fires after 5s debounce (editor closed on save — see known issue; lastSavedAt=${lastSavedAt}, ${Math.round((now - lastSavedAt) / 1000)}s ago)`);
-        }
+      const labelOk = after !== null && /^Saved(\s+just\s+now|\s+\d+s\s+ago)?$/.test(after);
+      if (!editorStillOpen) {
+        // Regression: autosave closed the editor (selfSaveSeq not honored).
+        fail('Autosave', `editor closed on autosave — selfSaveSeq regression (lastSavedAt=${lastSavedAt})`);
+      } else if (labelOk && storeOk) {
+        pass(`Autosave fires after 5s debounce, editor stays open (indicator="${after}", lastSavedAt=${lastSavedAt}, ${Math.round((now - lastSavedAt) / 1000)}s ago)`);
       } else {
         fail('Autosave', `indicator="${after}" lastSavedAt=${lastSavedAt} storeOk=${storeOk} labelOk=${labelOk}`);
       }

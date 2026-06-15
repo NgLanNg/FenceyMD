@@ -7,6 +7,7 @@
   import Placeholder from '@tiptap/extension-placeholder';
   import { Markdown } from 'tiptap-markdown';
   import { saveFile } from '../lib/stores.js';
+  import { selfSaveSeq } from '../lib/stores/progress.js';
   import { lastSavedAt } from '../lib/stores/progress.js';
   import { folderRoot } from '../lib/stores/state.js';
   import { saveClipboardImage } from '../lib/tauri.js';
@@ -476,6 +477,11 @@
     lastSavedAt.set(lastSaved);
     try {
       const md = editor.storage.markdown.getMarkdown();
+      // Signal the Reader that the imminent folderMeta->html change is OUR save,
+      // not an external edit — so it keeps the editor open. Must bump BEFORE
+      // saveFile (which triggers the html change); the Reader reads this
+      // untracked at html-change time. Without it the editor closes on autosave.
+      selfSaveSeq.update((n) => n + 1);
       await saveFile(item, md);
       dirty = false;
       if (!silent) onsaved?.();

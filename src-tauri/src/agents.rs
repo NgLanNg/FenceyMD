@@ -411,11 +411,14 @@ pub fn agents_register(id: String) -> Result<(), String> {
     let env = ResolveEnv::from_process();
     let d = descriptor(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
     let path = config_path(&id, &env).ok_or("could not resolve config path (HOME unset?)")?;
+    // Prefer the clean `fenceymd` command when the CLI is installed on PATH;
+    // otherwise fall back to the absolute binary path (always works).
     let exe = current_exe_string()?;
+    let cmd = crate::cli::preferred_command(std::path::Path::new(&exe));
     // Read immediately before write to minimize the window for a concurrent
     // rewrite by the agent itself (e.g. Claude Code persisting its own state).
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let updated = build_registered(d, &existing, &exe)?;
+    let updated = build_registered(d, &existing, &cmd)?;
     write_config(&path, &updated)
 }
 
@@ -453,6 +456,10 @@ pub fn refresh_registrations() {
     if cfg!(debug_assertions) || exe.replace('\\', "/").contains("/target/") {
         return;
     }
+    // The command we want registered: clean `fenceymd` if the CLI is on PATH,
+    // else the absolute binary path. This also upgrades older registrations
+    // (absolute path) to the clean command once the CLI is installed.
+    let cmd = crate::cli::preferred_command(std::path::Path::new(&exe));
     let env = ResolveEnv::from_process();
     for d in AGENTS {
         let path = match config_path(d.id, &env) {
@@ -466,11 +473,11 @@ pub fn refresh_registrations() {
         if !is_registered(d, &existing) {
             continue; // not opted in — leave it alone
         }
-        if registered_command_matches(d, &existing, &exe) {
+        if registered_command_matches(d, &existing, &cmd) {
             continue; // already current
         }
-        match build_registered(d, &existing, &exe).and_then(|u| write_config(&path, &u)) {
-            Ok(()) => eprintln!("[agents] refreshed {} command path → {exe}", d.id),
+        match build_registered(d, &existing, &cmd).and_then(|u| write_config(&path, &u)) {
+            Ok(()) => eprintln!("[agents] refreshed {} command → {cmd}", d.id),
             Err(e) => eprintln!("[agents] refresh {} failed: {e}", d.id),
         }
     }

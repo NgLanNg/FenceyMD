@@ -110,7 +110,7 @@ hand, a stdio agent's entry looks like:
   "mcpServers": {
     "fenceymd": {
       "type": "stdio",
-      "command": "/Applications/FenceyMD.app/Contents/MacOS/fenceymd",
+      "command": "fenceymd",
       "args": ["--mcp-bridge"]
     }
   }
@@ -202,7 +202,7 @@ native bridge — `fenceymd --mcp-bridge` reads the port file and
 forwards them to the live server:
 
 ```bash
-$ "/Applications/FenceyMD.app/Contents/MacOS/fenceymd" --mcp-bridge <<'EOF'
+$ fenceymd --mcp-bridge <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"tools/list"}
 {"jsonrpc":"2.0","id":2,"method":"tools/call",
  "params":{"name":"get_book_toc","arguments":{}}}

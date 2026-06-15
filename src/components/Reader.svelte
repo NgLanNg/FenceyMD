@@ -221,12 +221,18 @@
   //
   // IMPORTANT: must NOT read `editing` here — that would make Svelte track it,
   // causing the effect to re-run when editing=true and immediately reset it.
+  // Also read `selfSaveSeq` UNTRACKED (via get), not `$selfSaveSeq`: the editor
+  // bumps the seq *before* its save lands, so if we tracked it the bump would
+  // fire this effect early and consume the advance — then the later html change
+  // would see seq === _seen and close the editor anyway. Tracking only `html`
+  // means the effect runs once, on the content change, and at that point the
+  // bump is already visible via get().
   let _seenSaveSeq = get(selfSaveSeq);
   $effect(() => {
-    html;                     // track content changes
-    const seq = $selfSaveSeq; // track our-own-save signal
+    html;                        // track content changes (the only trigger)
+    const seq = get(selfSaveSeq); // untracked: did the editor signal this change?
     if (seq !== _seenSaveSeq) { _seenSaveSeq = seq; return; } // our save → keep open
-    editing = false;          // external change → close
+    editing = false;             // external change → close
   });
 
   // Enhance + restore scroll whenever the chapter element is available (first mount,
@@ -290,10 +296,18 @@
   // the WebView. Runs on every navigation, including the one
   // triggered by an agent's `open_file` call (so the cycle is
   // self-consistent: navigate → push state → agent queries → answers).
+  //
+  // Push `item?.diskPath` (the FULL on-disk relative path, including
+  // the group prefix for nested files) rather than `path` (group-
+  // stripped). Rust joins the stored path to the active folder root
+  // to read the file; if it gets the group-stripped path, nested
+  // files like `desktop-app/docs/MCP_SETUP.md` resolve to
+  // `<root>/docs/MCP_SETUP.md` (missing the `desktop-app/` prefix)
+  // and `get_current_chapter` errors with "No such file or directory".
   $effect(() => {
     mcpUpdateViewState({
       route_name: 'chapter',
-      current_chapter_path: path,
+      current_chapter_path: item?.diskPath || path,
     });
   });
 
