@@ -6,12 +6,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Folder scan no longer walks dependency/build trees.** `scan_folder` now
+  prunes `node_modules`, `target`, `dist`, `build`, and hidden dirs from the
+  walk (`WalkDir::filter_entry`). Opening a folder containing `node_modules`
+  (a project or monorepo) previously walked the entire tree — tens of thousands
+  of files, even ingesting `node_modules` `README.md`s — which made the open
+  (and an agent's auto-resolve folder-switch) appear to hang. New
+  `scan_prunes_node_modules_and_build_dirs` test.
+
+- **`--help` / `--version` no longer launch the GUI.** These flags were falling
+  through to `tauri::Builder::default().run(...)`, spawning a stray Tauri
+  instance that wrote a port file and then was killed by the shell —
+  leaving a stale `port` file with a dead pid behind. Next agent call
+  would get "connection refused" against a port nobody was listening
+  on. Both flags now print and exit before any GUI init. The new
+  `CLI_HELP` constant documents the full subcommand surface
+  (`fenceymd`, `--mcp-bridge`, `--install-cli`, `--help`/`-h`,
+  `--version`/`-V`).
+
+- **Bridge no longer dials a dead port.** `bridge_resolve_endpoint` now
+  calls `live_endpoint`, which verifies the pid in the `port` file is
+  alive before trusting it; if not, scans the `port-<pid>` siblings
+  for a live instance. Only when no live instance exists does the
+  bridge error with "is FenceyMD running?" — the agent gets a clear
+  signal instead of `connection refused` against a dead port. Two
+  new unit tests (`live_endpoint_prefers_bare_port_with_alive_pid`,
+  `live_endpoint_falls_back_to_sibling_when_bare_pid_dead`).
+
+### Changed
+- **CLI install targets on-PATH dirs only.** The `fenceymd` symlink now installs
+  only into `/opt/homebrew/bin` or `/usr/local/bin` (both on macOS's PATH),
+  dropping the `~/.local/bin`/`~/bin` fallbacks — those aren't on the default
+  PATH, so they produced "installed but not found" plus stray symlinks. If
+  neither dir is writable, Settings reports the CLI as not installed rather than
+  installing it somewhere unreachable. Verified via a clean uninstall → `.dmg`
+  reinstall → first launch: `fenceymd` lands on PATH (~1.5s) as a single symlink
+  and `fenceymd --mcp-bridge` returns the 7 tools.
+
 ## [1.1.0] — 2026-06-15
 
 ### Added
 - **`fenceymd` CLI on PATH.** The app makes its binary runnable as `fenceymd`
-  from a terminal by symlinking it into the first writable well-known bin dir
-  (Homebrew's `bin`, `/usr/local/bin`, then `~/.local/bin`/`~/bin`). Installed
+  from a terminal by symlinking it into the first writable on-PATH bin dir
+  (`/opt/homebrew/bin` or `/usr/local/bin`). Installed
   automatically on **first launch** (release builds; a `.dmg` drag can't run
   code, so first launch is the hook), plus a **Settings → AI agent control →
   Install CLI** button and an `--install-cli` flag on the app binary for manual

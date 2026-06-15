@@ -69,20 +69,20 @@ editing.
   Remembered across sessions.
 - **Keyboard.** ← / → between chapters. ⌘F in-chapter search.
   ⌘P PDF export. e to edit. Esc to clear.
-- **AI-agent control (MCP).** A local MCP server (JSON-RPC over
-  HTTP, bound to `127.0.0.1`) lets an AI agent drive the reader via
-  seven tools — `open_file`, `get_current_chapter`,
+- **AI-agent control (MCP).** A local, **read-only** MCP server
+  (JSON-RPC over HTTP, bound to `127.0.0.1`) lets an AI agent read and
+  navigate the reader via seven tools — `open_file`, `get_current_chapter`,
   `get_chapter_content`, `get_selected_text`, `get_book_toc`,
   `capture_screenshot` (the live view as a PNG for a vision LLM),
-  and `get_debug_log`. Connect an agent with **one toggle in
-  Settings → AI agent control** (Claude Code, Gemini, OpenCode,
-  Codex); it wires that agent's config to the app's native
-  `--mcp-bridge` subcommand (no Node, survives restarts).
-  HTTP-native agents can point directly at `http://127.0.0.1:PORT/mcp`.
-  Writes stay inside the folder; path-traversal is rejected in Rust.
-  View-changing tools (`open_file`, `capture_screenshot`) act on the
-  live window, so it must be visible; the read-only data tools work
-  regardless. See [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md),
+  and `get_debug_log`. No write tools: an agent can't edit your files
+  through the server, and path-traversal is rejected in Rust. Connect an
+  agent with **one toggle in Settings → AI agent control** (Claude Code,
+  Gemini, OpenCode, Codex); it wires that agent's config to the app's native
+  `--mcp-bridge` subcommand (no Node, survives restarts). HTTP-native agents
+  can point directly at `http://127.0.0.1:PORT/mcp`. View-changing tools
+  (`open_file`, `capture_screenshot`) act on the live window, so it must be
+  visible; the read-only data tools work regardless.
+  See [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md),
   [`docs/AGENT_REGISTRATION.md`](docs/AGENT_REGISTRATION.md), and
   chapter 13 of the bundled demo for the full tour.
 

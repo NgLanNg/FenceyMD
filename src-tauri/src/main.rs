@@ -344,6 +344,26 @@ fn debug_log_reveal(app: AppHandle) -> Result<(), String> {
 
 /// Recursively scan `root` for `.md` files, returning their relative paths +
 /// contents. Hidden files/dirs (any path segment starting with '.') are skipped.
+/// Whether the folder scan should descend into / keep this entry. Prunes
+/// dependency, build, and VCS/hidden directories: they never hold the user's
+/// content but can hold tens of thousands of files (a single `node_modules`
+/// dwarfs a real book and ships its own `README.md`s), which made opening a
+/// project folder or monorepo crawl — and an agent's auto-resolve folder-switch
+/// appear to hang. The root itself (depth 0) is never pruned; files pass
+/// through and are filtered by the `.md`/hidden/size checks in `scan_folder`.
+fn scan_should_descend(e: &walkdir::DirEntry) -> bool {
+    if e.depth() == 0 {
+        return true;
+    }
+    if e.file_type().is_dir() {
+        let name = e.file_name().to_string_lossy();
+        !(name.starts_with('.')
+            || matches!(name.as_ref(), "node_modules" | "target" | "dist" | "build"))
+    } else {
+        true
+    }
+}
+
 pub fn scan_folder(root: &Path) -> ScanResult {
     let folder_name = root
         .file_name()
@@ -351,7 +371,11 @@ pub fn scan_folder(root: &Path) -> ScanResult {
         .unwrap_or_else(|| "Selected Folder".into());
 
     let mut files = Vec::new();
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(scan_should_descend)
+        .filter_map(|e| e.ok())
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -1924,6 +1948,21 @@ pub fn log_from_rust(app: &AppHandle, line: &str) {
         .and_then(|mut f| std::io::Write::write_all(&mut f, format!("[{ts}] {safe}\n").as_bytes()));
 }
 
+/// `--help` text. Printed by `fenceymd --help`; kept in sync with the flags
+/// handled at the top of `main()`.
+const CLI_HELP: &str = "\
+FenceyMD — a local Markdown reader with a read-only MCP server for AI agents.
+
+USAGE:
+    fenceymd                 Launch the app (the MCP server starts with it)
+    fenceymd --mcp-bridge    Bridge stdio JSON-RPC to the running app's MCP server
+    fenceymd --install-cli   (Re)install the `fenceymd` symlink onto your PATH
+    fenceymd --help, -h      Show this help
+    fenceymd --version, -V   Show the version
+
+The MCP server is read-only (open/read/observe). See docs/MCP_SETUP.md.
+";
+
 /// App entry point: register the empty watcher state, wire up every IPC command
 /// the frontend can invoke, and run the Tauri event loop. The
 /// `generate_handler!` list is the authoritative set of callable commands — a
@@ -1958,6 +1997,19 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+
+    // `--help` / `--version`: print and exit BEFORE Tauri init. Without this,
+    // an unknown flag like `--help` falls through to launching the GUI app —
+    // which spins up a stray instance + a port file that then goes stale
+    // (exactly the mess `fenceymd --help` caused during MCP testing).
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        print!("{CLI_HELP}");
+        return;
+    }
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("fenceymd {}", env!("CARGO_PKG_VERSION"));
+        return;
     }
 
     tauri::Builder::default()
@@ -2092,6 +2144,26 @@ mod tests {
         assert_eq!(ch1.content, "# Ch1\nbody");
         assert_eq!(ch1.name, "ch1.md");
         assert!(r.root.ends_with(&r.folder_name));
+    }
+
+    #[test]
+    fn scan_prunes_node_modules_and_build_dirs() {
+        // Opening a project folder/monorepo must not walk dependency or build
+        // trees (a single node_modules can hold tens of thousands of files and
+        // its own README.md). Only the real top-level chapter should survive.
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let base = std::env::temp_dir().join(format!("fenceymd_prune_{}_{}", std::process::id(), n));
+        let _ = fs::remove_dir_all(&base);
+        for d in ["node_modules/pkg", "target/debug", "dist", "build", ".git"] {
+            fs::create_dir_all(base.join(d)).unwrap();
+            fs::write(base.join(d).join("README.md"), "# should be pruned").unwrap();
+        }
+        fs::write(base.join("real.md"), "# real").unwrap();
+        let r = scan_folder(&base);
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["real.md"], "only the top-level chapter should survive pruning");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -10,9 +10,8 @@
 //! install). A Settings action can (re)install or show status.
 //!
 //! ## What "install" means
-//! We create a symlink named `fenceymd` in the first writable directory among a
-//! short list of well-known, on-PATH locations (Homebrew's `bin`, `/usr/local/bin`,
-//! then user dirs). The symlink points at the real app binary; running it as
+//! We create a symlink named `fenceymd` in the first writable on-PATH bin dir
+//! (`/opt/homebrew/bin` or `/usr/local/bin`). The symlink points at the real app binary; running it as
 //! `fenceymd --mcp-bridge` resolves back to the app binary's bridge subcommand.
 //! If the app later moves, [`install_cli`] re-points the symlink on next launch.
 //!
@@ -28,30 +27,18 @@ use std::path::{Path, PathBuf};
 /// The command name we install on PATH.
 pub const CLI_NAME: &str = "fenceymd";
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-/// Well-known bin directories, best-first. Homebrew's dirs are reliably on the
-/// user's PATH and user-writable (no sudo); the `~` dirs are the fallback.
+/// The bin directories we install into. Both are on macOS's PATH for their
+/// Homebrew layout — `path_helper` keeps `/usr/local/bin` on the default PATH,
+/// and Homebrew adds `/opt/homebrew/bin`. We deliberately do NOT fall back to
+/// `~/.local/bin` / `~/bin`: those aren't on the default macOS PATH, so
+/// installing there would leave `fenceymd` present-but-not-found — worse than
+/// a clear "not installed". If neither is writable (a Mac with no Homebrew),
+/// nothing is installed and Settings reports it rather than installing invisibly.
 fn candidate_dirs() -> Vec<PathBuf> {
-    let mut v = vec![
-        PathBuf::from("/opt/homebrew/bin"), // Apple-Silicon Homebrew
-        PathBuf::from("/usr/local/bin"),    // Intel Homebrew / traditional
-    ];
-    if let Some(home) = home_dir() {
-        v.push(home.join(".local/bin"));
-        v.push(home.join("bin"));
-    }
-    v
-}
-
-/// A directory we're allowed to create if missing (only user-owned ones — never
-/// `mkdir` a system dir like `/usr/local/bin`).
-fn may_create(dir: &Path) -> bool {
-    home_dir()
-        .map(|h| dir.starts_with(&h))
-        .unwrap_or(false)
+    vec![
+        PathBuf::from("/opt/homebrew/bin"), // Apple-Silicon Homebrew (on PATH)
+        PathBuf::from("/usr/local/bin"),    // Intel Homebrew / default macOS PATH
+    ]
 }
 
 #[cfg(unix)]
@@ -94,12 +81,7 @@ pub fn install_into(dirs: &[PathBuf], exe: &Path) -> Result<PathBuf, String> {
     let exe_canon = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
     for dir in dirs {
         if !dir.is_dir() {
-            if may_create(dir) {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            if !dir.is_dir() {
-                continue;
-            }
+            continue; // only install into an existing on-PATH bin dir; never mkdir one
         }
         let link = dir.join(CLI_NAME);
         let existing = std::fs::symlink_metadata(&link).ok();

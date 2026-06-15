@@ -64,6 +64,8 @@
   let mdEl = $state(null);
   let searchQuery = $state('');
   let editing = $state(false);
+  // Bound to the "Find in chapter" input so the ⌘F shortcut can focus it.
+  let findInput = $state(null);
   let pdfBusy = $state(false);
   let outlineVisible = $state(false);
 
@@ -612,6 +614,32 @@
       e.preventDefault();
       return;
     }
+    // Esc clears an active in-chapter search even when the find box isn't
+    // focused (the box has its own Esc handler for when it is). The
+    // cheatsheet documents this as "Esc — Clear search / close".
+    if (e.key === 'Escape' && searchQuery) {
+      searchQuery = '';
+      e.preventDefault();
+      return;
+    }
+    // ⌘F / Ctrl+F — focus the "Find in chapter" box. We intercept so the
+    // browser's native find bar doesn't open instead; the input is always
+    // present in the toolbar, we just move focus to it and select any
+    // existing query so the user can type over it.
+    if (!e.shiftKey && (e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+      e.preventDefault();
+      findInput?.focus();
+      findInput?.select();
+      return;
+    }
+    // e — jump into raw-markdown edit mode for the current chapter. Only
+    // when editing is permitted (Tauri build or ?test=1); a bare letter
+    // key, so the INPUT/TEXTAREA guard above keeps it from firing mid-type.
+    if (canEdit && (e.key === 'e' || e.key === 'E') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      editing = true;
+      return;
+    }
     if (e.key === 'ArrowLeft' && sib.prev) goChapter(sib.prev.path);
     else if (e.key === 'ArrowRight' && sib.next) goChapter(sib.next.path);
     // ⌘⇧S (Ctrl+Shift+S on non-mac) — snapshot the app window to the
@@ -669,6 +697,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
             type="text" placeholder="Find in chapter…" aria-label="Search in chapter"
+            bind:this={findInput}
             bind:value={searchQuery}
             onkeydown={(e) => { if (e.key === 'Escape') searchQuery = ''; }}
           />

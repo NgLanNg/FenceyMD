@@ -38,7 +38,7 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -577,19 +577,55 @@ fn bridge_resolve_endpoint() -> Result<String, i32> {
             return Err(2);
         }
     };
-    for _ in 0..3 {
-        if let Ok(body) = std::fs::read_to_string(&port_file) {
-            if let Ok(pf) = serde_json::from_str::<PortFile>(&body) {
-                return Ok(format!("http://127.0.0.1:{}/mcp", pf.port));
-            }
-        }
+    if let Some(ep) = live_endpoint(&port_file) {
+        return Ok(ep);
     }
     eprintln!(
-        "[mcp-bridge] no readable port file at {} after 3 tries",
-        port_file.display()
+        "[mcp-bridge] no live FenceyMD instance found (port files at {} are absent or stale)",
+        port_file.parent().unwrap_or(&port_file).display()
     );
     eprintln!("[mcp-bridge] is FenceyMD running? (the port file is written on app startup)");
     Err(2)
+}
+
+fn read_port_file(path: &Path) -> Option<PortFile> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn bridge_endpoint_for(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp")
+}
+
+/// Find a *live* FenceyMD instance's MCP endpoint from the port files. Prefers
+/// the bare `port` file when its pid is still alive; otherwise scans the
+/// `port-<pid>` siblings for a live instance. Returns `None` if only stale
+/// (dead-pid) files exist — which is what a killed instance (no graceful
+/// cleanup) or a stray `fenceymd --help`-spawned-then-killed process leaves
+/// behind. Without this the bridge would happily hand back a dead port and the
+/// agent would get a bare "connection refused".
+fn live_endpoint(bare_port_file: &Path) -> Option<String> {
+    // Bare `port` (3 retries in case it's mid-write on a cold start), but only
+    // trust it if the owning pid is actually alive.
+    for _ in 0..3 {
+        if let Some(pf) = read_port_file(bare_port_file) {
+            if is_pid_alive(pf.pid) {
+                return Some(bridge_endpoint_for(pf.port));
+            }
+            break; // readable but stale → fall through to the per-pid scan
+        }
+    }
+    // Scan `port-<pid>` siblings for a live instance.
+    let dir = bare_port_file.parent()?;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        if entry.file_name().to_string_lossy().starts_with("port-") {
+            if let Some(pf) = read_port_file(&entry.path()) {
+                if is_pid_alive(pf.pid) {
+                    return Some(bridge_endpoint_for(pf.port));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Compute the port-file path the way the running app's `port_dir` does, but
@@ -1868,6 +1904,47 @@ mod tests {
         // If this ever flakes, the upper bound assumption is wrong
         // for the running OS — update accordingly.
         assert!(!super::is_pid_alive(4_000_000));
+    }
+
+    fn write_pf(path: &std::path::Path, port: u16, pid: u32) {
+        std::fs::write(
+            path,
+            serde_json::to_string(&PortFile {
+                port,
+                pid,
+                started_at: "x".into(),
+                version: "t".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn live_endpoint_skips_stale_bare_and_finds_live_sibling() {
+        let dir = std::env::temp_dir().join(format!("fmd_le_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("port");
+        write_pf(&bare, 11111, 4_000_000); // stale: dead pid
+        write_pf(&dir.join(format!("port-{}", std::process::id())), 22222, std::process::id()); // live
+        assert_eq!(
+            super::live_endpoint(&bare).as_deref(),
+            Some("http://127.0.0.1:22222/mcp")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn live_endpoint_none_when_all_stale() {
+        let dir = std::env::temp_dir().join(format!("fmd_le_stale_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("port");
+        write_pf(&bare, 11111, 4_000_000);
+        write_pf(&dir.join("port-4000001"), 33333, 4_000_001);
+        assert!(super::live_endpoint(&bare).is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ── New tools: input parsing + parse_log_ts ─────────────────────

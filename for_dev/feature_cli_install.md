@@ -27,14 +27,18 @@ moving the app and relaunching re-points the symlink.
 ## How we implemented it
 
 - **`src-tauri/src/cli.rs`.** `install_into(dirs, exe)` symlinks `fenceymd` →
-  the real app binary in the first writable directory of a best-first list:
-  `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/bin`. Homebrew's
-  dirs are reliably on PATH and user-writable (no sudo). Rules:
+  the real app binary in the first writable directory of just **two** on-PATH
+  candidates: `/opt/homebrew/bin` and `/usr/local/bin`. We intentionally do
+  **not** fall back to `~/.local/bin`/`~/bin` — they aren't on macOS's default
+  PATH, so installing there leaves the command present-but-not-found (worse than
+  a clear "not installed"). Rules:
   - **Never clobber** a non-symlink named `fenceymd` (could be the user's own).
   - A symlink already pointing at us → no-op; a **stale** symlink → replaced.
-  - Only `mkdir` candidate dirs **under `$HOME`** (never a system bin dir).
-  - `install_cli(exe)` supplies the real candidate list; `install_into` is the
-    filesystem-only, unit-tested core (6 tests).
+  - **Self-reference guard**: refuse `symlink(a, a)` when `current_exe()` is the
+    symlink itself (would brick the CLI); canonicalize before comparing.
+  - Never `mkdir` a candidate — only install into an existing on-PATH bin dir.
+  - `install_cli(exe)` supplies the candidate list; `install_into` is the
+    filesystem-only, unit-tested core (7 tests).
 - **Auto-install on launch** (`main.rs` setup): release builds only, and never
   from a `/target/` path, so `cargo tauri dev` can't symlink its debug binary
   over a real install. Best-effort, logged to the activity log.

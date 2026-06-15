@@ -4,106 +4,135 @@ title: Agent Control
 
 # Agent Control
 
-This is the chapter the rest of the book was written for.
+FenceyMD runs a local MCP server while it's open, so an AI agent that
+speaks MCP can **read and navigate** what you're reading — open a chapter,
+pull its content, see your selection, grab a screenshot of the view. It is
+**read-only**: the agent can observe and navigate, but cannot edit your files
+through the server. Everything stays on `127.0.0.1` — no network egress, no
+telemetry.
 
-FenceyMD is **AI-native**. The same Rust commands the UI uses —
-open a chapter, scroll, edit, save — are exposed to an AI agent
-over a local MCP server. Hand the agent the folder, tell it what
-you want, and it works. The same guarantees the UI gives you
-(writes stay inside the folder, scroll position preserved, no
-telemetry) carry over to the agent.
+You don't need this chapter to *use* FenceyMD. This is for when you want an
+agent — Claude Code, Gemini, OpenCode, Codex, or anything that speaks MCP — to
+follow along in the reader while it works.
 
-You don't need this chapter to *use* FenceyMD. The app still
-reads folders like a regular reader. This is for when you want
-an agent — Claude Code, Antigravity, OpenCode, anything that
-speaks MCP — to drive the app for you.
+## How it works
 
-## What ships today
+FenceyMD runs a small **local HTTP server** while it's open. The
+server binds a random `127.0.0.1` port (somewhere in 49152–65535),
+writes that port to a JSON file in the app data dir, and exposes
+seven MCP tools over plain JSON-RPC 2.0. No network egress. No
+telemetry. Binds to localhost only.
 
-A Rust HTTP server lives inside the `.app` and starts when the
-app starts. It binds a random `127.0.0.1` port (49152–65535),
-writes the port to a `port` file in the app data dir
-(`~/Library/Application Support/com.fenceymd.app/port` on macOS),
-and exposes seven MCP tools. That's the whole surface.
-
-| Tool | What it does |
-| --- | --- |
-| `open_file` | Navigate the reader to a chapter by path. |
-| `get_current_chapter` | What the reader is showing right now — path, scroll, a 500-char preview. |
-| `get_chapter_content` | The full markdown of any chapter, up to 1 MB. |
-| `get_selected_text` | The text the user has highlighted, with the anchor it's anchored to. |
-| `get_book_toc` | The flat list of every chapter in the open folder. |
-| `capture_screenshot` | The current window as a base64 PNG (downscaled to ≤1600px) — for a vision-capable LLM. |
-| `get_debug_log` | Recent activity-log lines (`tail` / `contains` / `since_ts` filters). |
-
-Everything is local. No token leaves your machine. The server
-is plain JSON-RPC 2.0 over HTTP — exactly what the MCP spec
-asks for.
-
-## A 30-second tour
-
-Assume FenceyMD is running with the `demo/` folder open, and
-port `60872` is what's in the port file.
-
-```bash
-$ curl -s -X POST -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-    http://127.0.0.1:60872/mcp
+```
+┌─────────────────────────────────────┐
+│  FenceyMD (open, folder loaded)     │
+│   • Rust HTTP server on 127.0.0.1   │
+│   • writes port to ~/Library/.../port│
+└──────────────┬──────────────────────┘
+               │
+       fenceymd --mcp-bridge
+       (reads port file, POSTs JSON-RPC
+        over stdin/stdout, no Node)
+               │
+       ┌──────┴──────┐
+       │             │
+   your agent    your agent
+   (stdio)       (HTTP)
 ```
 
-The response is the tool list. Pick one:
+Most agents (Claude Code, Gemini, OpenCode, Codex) speak stdio.
+FenceyMD's own binary doubles as a **bridge** that translates
+stdio JSON-RPC to the local HTTP server — no Node, no extra
+binary, no dependencies. Agents that speak HTTP directly
+(Antigravity, anything Streamable-HTTP native) can skip the
+bridge.
+
+## The seven tools
+
+| Tool                  | What the agent gets back                                             |
+|-----------------------|----------------------------------------------------------------------|
+| `open_file`           | `{ ok, active_folder, resolved_path }`. Path can be relative to the open folder, or absolute (auto-resolves to the right book). |
+| `get_current_chapter` | `{ open, path, scroll_position, word_count, reading_time_min, content_preview }`. What the reader is showing right now. |
+| `get_chapter_content` | The full markdown source of a chapter, up to 1 MB. Capped to keep the agent from accidentally pulling in a giant file. |
+| `get_selected_text`   | The text the user has highlighted, with the `data-md-anchor` of the enclosing block. Empty when nothing is selected. |
+| `get_book_toc`        | The flat list of every chapter in the open folder: `{ path, title, group, word_count }`. |
+| `capture_screenshot`  | The current FenceyMD window as a base64 PNG (downscaled to ≤1600px longest edge). Decodes into an image for a vision LLM. |
+| `get_debug_log`       | Recent activity-log lines. Optional args: `tail` (default 100, max 1000), `contains` (substring filter), `since_ts` (epoch-seconds floor). |
+
+Writes are bounded to the open folder. Path traversal
+(`../etc/passwd`, absolute escapes out of the folder) is rejected
+with a `-32001` JSON-RPC error before any disk access.
+
+## A 60-second tour
+
+FenceyMD is running. The demo folder is open. The port file says
+`60872`. The bridge handles the port lookup for you:
 
 ```bash
-$ curl -s -X POST -H "Content-Type: application/json" \
-    -d '{
-      "jsonrpc":"2.0","id":2,"method":"tools/call",
-      "params":{"name":"get_current_chapter","arguments":{}}
-    }' \
-    http://127.0.0.1:60872/mcp
+$ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+    | fenceymd --mcp-bridge
 ```
 
-You get back something like:
+You get back a one-line JSON list of the seven tools above. That
+single handshake is the whole protocol — every other frame looks
+the same.
+
+To peek at what's currently open:
+
+```bash
+$ echo '{
+    "jsonrpc":"2.0","id":2,"method":"tools/call",
+    "params":{"name":"get_current_chapter","arguments":{}}
+  }' | fenceymd --mcp-bridge
+```
 
 ```json
 {
   "result": {
     "path": "08-excalidraw.md",
     "scroll_position": 0.42,
-    "preview": "Inline Excalidraw becomes a real drawing canvas…"
+    "word_count": 1180,
+    "reading_time_min": 6,
+    "content_preview": "Inline Excalidraw becomes a real drawing canvas…"
   }
 }
 ```
 
-That's it. The agent now knows what you're reading.
+The agent now knows what you're reading — the chapter path, the
+scroll position, the word count, and a 500-char preview.
 
-To navigate:
+To navigate, send `open_file` with the relative path:
 
 ```bash
-$ curl -s -X POST -H "Content-Type: application/json" \
-    -d '{
-      "jsonrpc":"2.0","id":3,"method":"tools/call",
-      "params":{
-        "name":"open_file",
-        "arguments":{"path":"02-navigation.md"}
-      }
-    }' \
-    http://127.0.0.1:60872/mcp
+$ echo '{
+    "jsonrpc":"2.0","id":3,"method":"tools/call",
+    "params":{"name":"open_file","arguments":{"path":"02-navigation.md"}}
+  }' | fenceymd --mcp-bridge
 ```
 
 The reader jumps to chapter 2.
 
-## The bridge
+To read any chapter's full source:
 
-Some agents (Claude Code and most CLI agents) only speak stdio,
-not HTTP. For those, FenceyMD's own binary doubles as a bridge:
-run it with `--mcp-bridge` and it translates a stdio JSON-RPC
-stream to the local HTTP server, rediscovering the port on each
-connection. No Node, no extra binary, no dependencies.
+```bash
+$ echo '{
+    "jsonrpc":"2.0","id":4,"method":"tools/call",
+    "params":{"name":"get_chapter_content","arguments":{"path":"02-navigation.md"}}
+  }' | fenceymd --mcp-bridge
+```
 
-The easiest way to wire it up is **Settings → AI agent control**:
-flip the toggle for your agent and FenceyMD writes the right
-entry into that agent's own config. If you'd rather do it by
-hand, a stdio agent's entry looks like:
+That's the whole handshake. Everything else builds on top of it.
+
+## Wiring an agent (the 30-second version)
+
+The fastest path is **Settings → AI agent control** in FenceyMD.
+Flip the toggle for your agent — FenceyMD writes the right entry
+into that agent's own config file, idempotently and without
+touching anything else. Restart the agent (start a fresh session)
+and you're connected.
+
+If you'd rather edit by hand, all four agents point at the same
+native `--mcp-bridge` subcommand:
 
 ```json
 {
@@ -117,101 +146,109 @@ hand, a stdio agent's entry looks like:
 }
 ```
 
-Because the bridge looks up the port file every time, a single
-static config keeps working across app restarts.
+The per-agent files and the subtle schema differences are in
+`docs/AGENT_REGISTRATION.md`:
+
+- **Claude Code** — `~/.claude.json`, `mcpServers`, `type:"stdio"`.
+- **Gemini CLI / Antigravity** — `~/.gemini/settings.json`, no `type` field.
+- **OpenCode** — `~/.config/opencode/opencode.json`, `mcp` key (not `mcpServers`), `type:"local"`, command is a single array.
+- **Codex** — `~/.codex/config.toml`, `[mcp_servers.fenceymd]`.
+
+All four point at the same `fenceymd --mcp-bridge` entry, so the
+config survives app restarts (the bridge rediscovers the port on
+every connection).
 
 ## What the agent can and can't do
 
 **Can.**
 
-- Open any chapter in the currently-open folder.
-- Read the full content of any chapter.
-- See what's on screen and what the user highlighted.
-- Get the table of contents.
-- Pass a `session_context` along with `open_file` so a future
-  sidebar chat knows which agent (and which session of that
-  agent) the request came from.
+- Open any chapter in the currently-open folder. Relative or
+  absolute paths; absolute paths auto-resolve to the right book.
+- Read the full content of any chapter (capped at 1 MB).
+- See what's on screen and what you've highlighted.
+- Get the table of contents of the open book.
+- Grab a PNG screenshot of the live view as a base64 blob (the
+  window must be visible; an occluded window can capture blank).
+- Read the recent activity log (`get_debug_log`).
+- Pass an optional `session_context` object with `open_file`; it's
+  stored and emitted to the UI, nothing more today.
 
 **Can't.**
 
-- Read or write anything outside the open folder. Path-traversal
-  (`../etc/passwd`, absolute paths) is rejected with a
-  `-32001` JSON-RPC error before the disk is touched.
-- Bypass the editor's save flow. The same `write_file` Rust
-  command the UI uses is what the agent would call in Phase 2.
+- Write or edit anything. Every tool is read/navigate/observe;
+  there is no write tool over MCP.
+- Reach outside the open folder. Path traversal (`../etc/passwd`,
+  absolute escapes) is rejected with a `-32001` error before the
+  disk is touched.
 - Spawn a second instance silently. Each FenceyMD window gets
-  its own `port-<pid>` file so a second `open` doesn't clobber
+  its own `port-<pid>` file, so a second `open` doesn't clobber
   the first.
 
-## How to point an agent at FenceyMD
+## The bridge, in detail
 
-The fastest path is the **Settings → AI agent control** toggle —
-it writes the config for you. If you prefer to edit by hand,
-`docs/AGENT_REGISTRATION.md` has the exact per-agent shapes; they
-differ in subtle ways, so match them exactly:
+`fenceymd --mcp-bridge` is a small Rust binary that does three
+things:
 
-- **Claude Code** — `~/.claude.json`, `mcpServers`, `type:"stdio"`.
-- **Gemini CLI / Antigravity** — `~/.gemini/settings.json`, no `type` field.
-- **OpenCode** — `~/.config/opencode/opencode.json`, `mcp` key, `type:"local"`.
-- **Codex** — `~/.codex/config.toml`, `[mcp_servers.fenceymd]`.
+1. Reads the port file the running app wrote on startup.
+2. Reads newline-delimited JSON from **stdin**.
+3. POSTs each frame to `http://127.0.0.1:<port>/mcp` and
+   writes the response (also newline-delimited JSON) to
+   **stdout**.
 
-All four point at the same native `--mcp-bridge` subcommand, so
-the entry survives app restarts.
+EOF on stdin → clean exit. Connection refused on dial → a
+structured JSON-RPC error on stdout (not a hang). The agent sees
+a real error rather than a frozen prompt. This is the standard
+MCP-over-stdio contract.
 
-## What's not here yet
-
-This is **Phase 1**. It gets the agent on the same level as the
-user: read, navigate, observe.
-
-What it doesn't have yet — and what's planned:
-
-- **Phase 2** — an in-app sidebar chat. The agent gets its own
-  pane, with scrollback, tool-call traces, and the
-  `session_context` plumbing already wired. Five agents (Claude,
-  Gemini, Codex, OpenCode, Antigravity) are being designed for
-  parallel support.
-- **v2 (anchor-based edit)** — the user points at a block, the
-  agent returns a surgical diff for that block, the editor
-  applies it without touching the rest. This is the round-trip
-  the *book* was written for: read with the agent, edit with
-  the agent, never leave the chapter.
-
-Both phases are scoped in `vault/plan/20260613_mcp_phase2_design.md`
-and `vault/plan/20260613_anchor_edit_design.md`. The anchor
-infrastructure that v2 needs is shipping in v1.1 (#23 on the
-roadmap) — every block will have a stable `data-md-anchor`.
-
-## A note on trust
-
-The whole point of an agent reading your book is that the agent
-shouldn't be able to do things you wouldn't do. The MCP server
-enforces that: it runs as a child of the desktop app, it's bound
-to `127.0.0.1`, it has no network egress, and the path
-traversal guard is in Rust (not JavaScript, where it could be
-bypassed by a hostile page).
-
-If the agent is malicious, the worst it can do is read and edit
-files in the folder you opened. That's the threat model. The
-server doesn't try to be more clever than that — but it doesn't
-try to be less, either.
+Because the bridge looks up the port file on every connection,
+a single static config entry keeps working across app restarts.
+When you update the app and the binary moves, FenceyMD
+self-heals the registered configs on next launch.
 
 ## See it work
 
-With FenceyMD running, pipe a couple of frames through the
-native bridge — `fenceymd --mcp-bridge` reads the port file and
-forwards them to the live server:
+With FenceyMD running, pipe a few frames through the native
+bridge in one go (newline-delimited JSON on stdin):
 
 ```bash
 $ fenceymd --mcp-bridge <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"tools/list"}
 {"jsonrpc":"2.0","id":2,"method":"tools/call",
  "params":{"name":"get_book_toc","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call",
+ "params":{"name":"get_current_chapter","arguments":{}}}
 EOF
 ```
 
-You should see two JSON-RPC responses: the tool list, then the
-14-chapter TOC. That's the whole handshake. Everything else
-builds on top of it.
+You should see three JSON-RPC responses: the tool list, the
+14-chapter TOC, and a preview of whatever chapter is open. That's
+the whole handshake. Everything else builds on top of it.
 
-If you're running from source (not the bundled .app), use the
-built binary: `src-tauri/target/release/fenceymd --mcp-bridge`.
+If you want the raw HTTP path (no bridge), the same frames work
+as `curl -X POST` against `http://127.0.0.1:<port>/mcp` — read
+the port from `~/Library/Application Support/com.fenceymd.app/port`
+on macOS (or the equivalent on Linux/Windows; see
+`docs/MCP_SETUP.md`).
+
+## A note on trust
+
+The whole point of an agent reading your book is that the
+agent shouldn't be able to do things you wouldn't do. The MCP
+server enforces that: it runs as a child of the desktop app,
+it's bound to `127.0.0.1`, it has no network egress, and the
+path traversal guard is in Rust (not JavaScript, where it could
+be bypassed by a hostile page).
+
+If the agent is malicious, the worst it can do over MCP is *read*
+Markdown files in the folder you opened (and screenshot the
+window) — the tools are read-only, so it can't write or escape
+the folder. That's the threat model.
+
+## Scope today
+
+Today the tools are **read + navigate + observe** (plus a screenshot
+and the activity log). There is no agent-driven *editing* over MCP
+yet — an agent can't change your files through the server.
+
+For the start-here setup guide and per-agent config, see
+`docs/MCP_SETUP.md` and `docs/AGENT_REGISTRATION.md`.
