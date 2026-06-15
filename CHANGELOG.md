@@ -76,6 +76,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reinstall → first launch: `fenceymd` lands on PATH (~1.5s) as a single symlink
   and `fenceymd --mcp-bridge` returns the 7 tools.
 
+### Known issues (workarounds documented)
+
+- **Stale Svelte components when a chapter's fence set changes.** If a file
+  was edited externally (e.g. by an agent via `write_file`, or by hand in
+  another editor) and the change swaps a fence's *type* (e.g. an
+  ```` ```excalidraw ```` block becomes ```` ```mermaid ````, or vice
+  versa), the Reader re-renders the chapter's body from the new markdown
+  but the previously-mounted Svelte component (e.g. `ExcalidrawViewer`)
+  may not unmount cleanly. The result: a hybrid render — new prose, old
+  diagram canvas. The Rust HTTP server returns the correct content
+  (`get_chapter_content` is current), so this is a renderer-lifecycle
+  bug, not a data bug. Workaround: **Cmd+Shift+R** in the FenceyMD
+  window to hard-reload the webview, which discards the in-memory
+  component tree. The watcher + the chapter-mount `enhance()` effect
+  then rebuild fresh from disk. Root cause: `enhance()` mounts
+  heavy renderers via `svelteMount(ExcalidrawViewer, ...)` outside
+  Svelte's template, so Svelte's per-`{@html}` unmount cleanup
+  doesn't reach those component instances. Proper fix (deferred to
+  v1.1.1): track mounted renderers in the registry and call
+  `svelteUnmount()` on them when the chapter's `html` derived changes,
+  before the new HTML replaces the old.
+
 ## [1.1.0] — 2026-06-15
 
 ### Added
